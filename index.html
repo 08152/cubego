@@ -1,147 +1,537 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8" />
-  <title>cubego – kleine KI im Browser</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CubeGo – eigene KI</title>
+
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 24px;
+      font-family: system-ui, Arial, sans-serif;
       background: #111;
       color: #eee;
-      margin: 0;
-      padding: 20px;
     }
+
+    .container {
+      width: min(900px, 100%);
+      margin: 0 auto;
+    }
+
     h1 {
-      margin-top: 0;
+      margin: 0 0 6px;
+      font-size: 2rem;
     }
+
+    .subtitle {
+      color: #aaa;
+      margin-bottom: 22px;
+    }
+
     #status {
-      margin-bottom: 10px;
-      font-size: 0.9rem;
+      padding: 12px 14px;
+      border: 1px solid #444;
+      border-radius: 8px;
+      background: #181818;
+      margin-bottom: 14px;
       color: #9fd3ff;
     }
-    #output {
-      white-space: pre-wrap;
-      border: 1px solid #444;
-      padding: 10px;
-      min-height: 80px;
-      margin-top: 10px;
-      background: #181818;
+
+    #progressBox {
+      display: none;
+      margin-bottom: 14px;
     }
+
+    .progress-bg {
+      width: 100%;
+      height: 14px;
+      background: #292929;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    #progressBar {
+      width: 0%;
+      height: 100%;
+      background: #3b82f6;
+      transition: width 0.25s ease;
+    }
+
+    #progressText {
+      margin-top: 7px;
+      color: #aaa;
+      font-size: 0.9rem;
+    }
+
     textarea {
       width: 100%;
-      height: 80px;
+      min-height: 120px;
+      resize: vertical;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #444;
       background: #181818;
       color: #eee;
-      border: 1px solid #444;
-      padding: 8px;
-      resize: vertical;
+      font: inherit;
+      outline: none;
     }
+
+    textarea:focus {
+      border-color: #3b82f6;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
     button {
-      margin-top: 10px;
-      padding: 8px 14px;
-      border: none;
+      padding: 10px 16px;
+      border: 0;
+      border-radius: 8px;
       background: #3b82f6;
       color: white;
+      font: inherit;
       cursor: pointer;
-      border-radius: 4px;
     }
+
+    button:hover:not(:disabled) {
+      filter: brightness(1.08);
+    }
+
     button:disabled {
       background: #555;
-      cursor: default;
+      cursor: not-allowed;
+    }
+
+    #output {
+      margin-top: 18px;
+      min-height: 140px;
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid #444;
+      background: #181818;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .label {
+      color: #aaa;
+      font-size: 0.9rem;
+      margin-bottom: 7px;
+    }
+
+    .info {
+      margin-top: 12px;
+      color: #888;
+      font-size: 0.85rem;
     }
   </style>
 </head>
+
 <body>
-  <h1>cubego</h1>
-  <div id="status">Starte KI…</div>
+  <div class="container">
+    <h1>cubego</h1>
+    <div class="subtitle">Deine eigene KI</div>
 
-  <textarea id="input" placeholder="Schreib hier deinen Prompt rein…"></textarea>
-  <button id="trainBtn">Trainieren</button>
-  <button id="generateBtn" disabled>Generieren</button>
+    <div id="status">Verbinde mit dem KI-Server…</div>
 
-  <div id="output"></div>
+    <div id="progressBox">
+      <div class="progress-bg">
+        <div id="progressBar"></div>
+      </div>
+      <div id="progressText">0 %</div>
+    </div>
+
+    <div class="label">Dein Prompt</div>
+
+    <textarea
+      id="input"
+      placeholder="Schreib hier deine Frage oder deinen Text hinein…"
+    ></textarea>
+
+    <div class="buttons">
+      <button id="trainBtn">Trainieren</button>
+      <button id="generateBtn" disabled>Generieren</button>
+    </div>
+
+    <div class="label" style="margin-top:18px;">Antwort</div>
+    <div id="output">Noch keine Antwort.</div>
+
+    <div class="info">
+      Das Modell wird auf dem Render-Server trainiert. Die Dateien werden danach
+      vom Server in GELERNT gespeichert und mit GitHub synchronisiert.
+    </div>
+  </div>
 
   <script>
+    "use strict";
+
     const statusEl = document.getElementById("status");
     const outputEl = document.getElementById("output");
     const inputEl = document.getElementById("input");
     const trainBtn = document.getElementById("trainBtn");
     const generateBtn = document.getElementById("generateBtn");
-
-    // WICHTIG: Pfade relativ zum Repo /cubego
-    const trainWorker = new Worker("./train-worker.js");
-    const generateWorker = new Worker("./generate-worker.js");
+    const progressBox = document.getElementById("progressBox");
+    const progressBar = document.getElementById("progressBar");
+    const progressText = document.getElementById("progressText");
 
     let modelReady = false;
+    let trainingPolling = false;
+    let generationPolling = false;
 
-    // Fehler im Worker sichtbar machen
-    trainWorker.onerror = (e) => {
-      console.error("Train-Worker error:", e);
-      statusEl.textContent = "Fehler im Train-Worker (siehe Konsole)";
-    };
+    async function api(url, options = {}) {
+      const response = await fetch(url, {
+        cache: "no-store",
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        }
+      });
 
-    generateWorker.onerror = (e) => {
-      console.error("Generate-Worker error:", e);
-      statusEl.textContent = "Fehler im Generate-Worker (siehe Konsole)";
-    };
+      let data;
 
-    // Nachrichten vom Train-Worker
-    trainWorker.onmessage = (event) => {
-      const data = event.data;
-
-      if (data.status === "loading") {
-        statusEl.textContent = "Lade Modelldaten…";
-      } else if (data.status === "training") {
-        statusEl.textContent = "Trainiere Modell…";
-      } else if (data.status === "ready") {
-        statusEl.textContent = "Modell bereit. Du kannst jetzt generieren.";
-        modelReady = true;
-        generateBtn.disabled = false;
-      } else if (data.status === "log") {
-        console.log("[TRAIN]", data.message);
-      } else if (data.status === "error") {
-        statusEl.textContent = "Train-Fehler: " + data.message;
-        console.error("Train-Fehler:", data.message);
+      try {
+        data = await response.json();
+      } catch {
+        throw new Error(
+          `Server antwortet nicht mit JSON (${response.status}).`
+        );
       }
-    };
 
-    // Nachrichten vom Generate-Worker
-    generateWorker.onmessage = (event) => {
-      const data = event.data;
-
-      if (data.status === "generating") {
-        statusEl.textContent = "Generiere Text…";
-      } else if (data.status === "done") {
-        statusEl.textContent = "Fertig.";
-        outputEl.textContent = data.output || "";
-      } else if (data.status === "error") {
-        statusEl.textContent = "Generate-Fehler: " + data.message;
-        console.error("Generate-Fehler:", data.message);
+      if (!response.ok) {
+        throw new Error(
+          data.error ||
+          data.message ||
+          data.details ||
+          `HTTP-Fehler ${response.status}`
+        );
       }
-    };
 
-    // Start: Modell laden / trainieren
-    statusEl.textContent = "Lade Modelldaten…";
-    trainWorker.postMessage({ action: "init" });
+      return data;
+    }
 
-    trainBtn.addEventListener("click", () => {
-      statusEl.textContent = "Trainiere Modell…";
-      trainWorker.postMessage({ action: "train" });
-    });
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
 
-    generateBtn.addEventListener("click", () => {
-      if (!modelReady) {
-        statusEl.textContent = "Modell noch nicht bereit.";
+    function setProgress(value, details = "") {
+      const percent = Math.max(0, Math.min(100, Number(value) || 0));
+
+      progressBox.style.display = "block";
+      progressBar.style.width = percent + "%";
+
+      progressText.textContent =
+        `${percent.toFixed(1)} %` +
+        (details ? ` – ${details}` : "");
+    }
+
+    function hideProgress() {
+      progressBox.style.display = "none";
+      progressBar.style.width = "0%";
+      progressText.textContent = "0 %";
+    }
+
+    function updateButtons() {
+      trainBtn.disabled = trainingPolling;
+      generateBtn.disabled = !modelReady || trainingPolling || generationPolling;
+    }
+
+    async function loadStatus() {
+      try {
+        const data = await api("/api/status");
+
+        const model = data.model || {};
+        const training = data.training || {};
+
+        modelReady =
+          model.model === true &&
+          model.tokenizer === true &&
+          model.config === true;
+
+        if (training.running) {
+          setStatus(training.message || "Modell wird trainiert…");
+
+          setProgress(
+            training.progress,
+            training.totalEpochs
+              ? `Epoche ${training.epoch || 0}/${training.totalEpochs}`
+              : ""
+          );
+
+          startTrainingPolling();
+        } else if (modelReady) {
+          hideProgress();
+          setStatus("Modell bereit. Du kannst jetzt eine Eingabe senden.");
+        } else {
+          hideProgress();
+          setStatus(
+            "Noch kein fertiges Modell vorhanden. Klicke auf „Trainieren“."
+          );
+        }
+
+        updateButtons();
+      } catch (error) {
+        setStatus("Verbindungsfehler: " + error.message);
+        modelReady = false;
+        updateButtons();
+      }
+    }
+
+    async function startTraining() {
+      if (trainingPolling) {
         return;
       }
+
+      try {
+        outputEl.textContent = "Das Modell wird trainiert…";
+        setStatus("Starte Training…");
+
+        trainBtn.disabled = true;
+        generateBtn.disabled = true;
+
+        const result = await api("/api/train/start", {
+          method: "POST",
+          body: JSON.stringify({
+            epochs: 10,
+            sequenceLength: 256,
+            learningRate: 0.0003,
+            contextSize: 256
+          })
+        });
+
+        if (!result.success) {
+          throw new Error(result.message || "Training konnte nicht gestartet werden.");
+        }
+
+        trainingPolling = true;
+        modelReady = false;
+        updateButtons();
+
+        setProgress(0, "Training wird gestartet…");
+        startTrainingPolling();
+
+      } catch (error) {
+        trainingPolling = false;
+
+        setStatus("Trainingsfehler: " + error.message);
+        outputEl.textContent = "Training konnte nicht gestartet werden.";
+
+        updateButtons();
+      }
+    }
+
+    async function startTrainingPolling() {
+      if (!trainingPolling) {
+        trainingPolling = true;
+      }
+
+      if (startTrainingPolling.running) {
+        return;
+      }
+
+      startTrainingPolling.running = true;
+
+      try {
+        while (true) {
+          const data = await api("/api/training-state");
+
+          const progress = Number(data.progress) || 0;
+
+          setProgress(
+            progress,
+            data.totalEpochs
+              ? `Epoche ${data.epoch || 0}/${data.totalEpochs}`
+              : data.message || ""
+          );
+
+          if (data.phase === "error") {
+            trainingPolling = false;
+            modelReady = false;
+
+            setStatus(
+              "Trainingsfehler: " +
+              (data.error || data.message || "Unbekannter Fehler")
+            );
+
+            hideProgress();
+            updateButtons();
+            break;
+          }
+
+          if (!data.running && data.phase === "finished") {
+            trainingPolling = false;
+
+            setProgress(100, "Training abgeschlossen");
+            setStatus("Training abgeschlossen. Modell wird geprüft…");
+
+            await checkModel();
+
+            updateButtons();
+            break;
+          }
+
+          if (!data.running && data.phase === "idle") {
+            trainingPolling = false;
+            await checkModel();
+            updateButtons();
+            break;
+          }
+
+          setStatus(data.message || "Trainiere Modell…");
+
+          await new Promise(resolve => setTimeout(resolve, 1200));
+        }
+      } catch (error) {
+        trainingPolling = false;
+
+        setStatus("Fehler beim Abrufen des Trainingsstatus: " + error.message);
+        updateButtons();
+      } finally {
+        startTrainingPolling.running = false;
+      }
+    }
+
+    async function checkModel() {
+      try {
+        const data = await api("/api/status");
+        const model = data.model || {};
+
+        modelReady =
+          model.model === true &&
+          model.tokenizer === true &&
+          model.config === true;
+
+        if (modelReady) {
+          setStatus("Modell bereit. Du kannst jetzt generieren.");
+        } else {
+          setStatus(
+            "Training beendet, aber die Modelldateien sind noch nicht vollständig vorhanden."
+          );
+        }
+
+        updateButtons();
+      } catch (error) {
+        modelReady = false;
+        setStatus("Modellstatus konnte nicht geprüft werden: " + error.message);
+        updateButtons();
+      }
+    }
+
+    async function startGeneration() {
       const prompt = inputEl.value.trim();
+
       if (!prompt) {
-        statusEl.textContent = "Bitte einen Prompt eingeben.";
+        setStatus("Bitte zuerst einen Prompt eingeben.");
+        inputEl.focus();
         return;
       }
-      statusEl.textContent = "Generiere Text…";
-      generateWorker.postMessage({ action: "generate", prompt });
+
+      if (!modelReady) {
+        setStatus("Das Modell ist noch nicht bereit.");
+        return;
+      }
+
+      if (generationPolling) {
+        return;
+      }
+
+      try {
+        generationPolling = true;
+        generateBtn.disabled = true;
+
+        outputEl.textContent = "";
+        setStatus("Generiere Antwort…");
+
+        const result = await api("/api/generate", {
+          method: "POST",
+          body: JSON.stringify({
+            prompt: prompt
+          })
+        });
+
+        if (!result.success) {
+          throw new Error(
+            result.message || "Generation konnte nicht gestartet werden."
+          );
+        }
+
+        await pollGeneration();
+
+      } catch (error) {
+        generationPolling = false;
+
+        setStatus("Generierungsfehler: " + error.message);
+        outputEl.textContent = "Es konnte keine Antwort erzeugt werden.";
+
+        updateButtons();
+      }
+    }
+
+    async function pollGeneration() {
+      if (pollGeneration.running) {
+        return;
+      }
+
+      pollGeneration.running = true;
+
+      try {
+        while (true) {
+          const data = await api("/api/generate/status");
+
+          if (data.text) {
+            outputEl.textContent = data.text;
+          }
+
+          if (data.error) {
+            throw new Error(data.error);
+          }
+
+          if (!data.running) {
+            generationPolling = false;
+
+            if (data.text) {
+              outputEl.textContent = data.text;
+            }
+
+            setStatus("Fertig.");
+            updateButtons();
+            break;
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 700));
+        }
+      } finally {
+        pollGeneration.running = false;
+      }
+    }
+
+    trainBtn.addEventListener("click", startTraining);
+    generateBtn.addEventListener("click", startGeneration);
+
+    inputEl.addEventListener("keydown", event => {
+      if (
+        event.key === "Enter" &&
+        (event.ctrlKey || event.metaKey)
+      ) {
+        event.preventDefault();
+
+        if (!generateBtn.disabled) {
+          startGeneration();
+        }
+      }
     });
+
+    // Beim Laden den echten Zustand vom Render-Server holen.
+    loadStatus();
   </script>
 </body>
 </html>
