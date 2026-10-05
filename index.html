@@ -1,3 +1,4 @@
+```html
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -147,6 +148,7 @@
       <div class="progress-bg">
         <div id="progressBar"></div>
       </div>
+
       <div id="progressText">0 %</div>
     </div>
 
@@ -163,11 +165,11 @@
     </div>
 
     <div class="label" style="margin-top:18px;">Antwort</div>
+
     <div id="output">Noch keine Antwort.</div>
 
     <div class="info">
-      Das Modell wird auf dem Render-Server trainiert. Die Dateien werden danach
-      vom Server in GELERNT gespeichert und mit GitHub synchronisiert.
+      Das Modell wird auf dem Render-Server trainiert.
     </div>
   </div>
 
@@ -224,7 +226,10 @@
     }
 
     function setProgress(value, details = "") {
-      const percent = Math.max(0, Math.min(100, Number(value) || 0));
+      const percent = Math.max(
+        0,
+        Math.min(100, Number(value) || 0)
+      );
 
       progressBox.style.display = "block";
       progressBar.style.width = percent + "%";
@@ -241,8 +246,13 @@
     }
 
     function updateButtons() {
-      trainBtn.disabled = trainingPolling;
-      generateBtn.disabled = !modelReady || trainingPolling || generationPolling;
+      trainBtn.disabled =
+        trainingPolling || generationPolling;
+
+      generateBtn.disabled =
+        !modelReady ||
+        trainingPolling ||
+        generationPolling;
     }
 
     async function loadStatus() {
@@ -258,10 +268,14 @@
           model.config === true;
 
         if (training.running) {
-          setStatus(training.message || "Modell wird trainiert…");
+          trainingPolling = true;
+
+          setStatus(
+            training.message || "Modell wird trainiert…"
+          );
 
           setProgress(
-            training.progress,
+            training.progress || 0,
             training.totalEpochs
               ? `Epoche ${training.epoch || 0}/${training.totalEpochs}`
               : ""
@@ -270,18 +284,27 @@
           startTrainingPolling();
         } else if (modelReady) {
           hideProgress();
-          setStatus("Modell bereit. Du kannst jetzt eine Eingabe senden.");
+
+          setStatus(
+            "Modell bereit. Du kannst jetzt generieren."
+          );
         } else {
           hideProgress();
+
           setStatus(
             "Noch kein fertiges Modell vorhanden. Klicke auf „Trainieren“."
           );
         }
 
         updateButtons();
+
       } catch (error) {
-        setStatus("Verbindungsfehler: " + error.message);
         modelReady = false;
+
+        setStatus(
+          "Verbindungsfehler: " + error.message
+        );
+
         updateButtons();
       }
     }
@@ -292,59 +315,80 @@
       }
 
       try {
-        outputEl.textContent = "Das Modell wird trainiert…";
+        trainingPolling = true;
+        modelReady = false;
+
+        outputEl.textContent =
+          "Das Modell wird trainiert…";
+
         setStatus("Starte Training…");
+        setProgress(0, "Training wird gestartet…");
 
-        trainBtn.disabled = true;
-        generateBtn.disabled = true;
+        updateButtons();
 
+        /*
+         * KLEINES TESTMODELL
+         *
+         * Absichtlich deutlich kleiner als vorher,
+         * damit Render schneller trainieren kann.
+         */
         const result = await api("/api/train/start", {
           method: "POST",
+
           body: JSON.stringify({
-            epochs: 10,
-            sequenceLength: 256,
+            epochs: 1,
+            sequenceLength: 32,
             learningRate: 0.0003,
-            contextSize: 256
+            contextSize: 32,
+            embeddingSize: 64,
+            layers: 2,
+            heads: 2,
+            headSize: 32,
+            feedForwardSize: 128
           })
         });
 
         if (!result.success) {
-          throw new Error(result.message || "Training konnte nicht gestartet werden.");
+          throw new Error(
+            result.message ||
+            "Training konnte nicht gestartet werden."
+          );
         }
 
-        trainingPolling = true;
-        modelReady = false;
-        updateButtons();
-
-        setProgress(0, "Training wird gestartet…");
         startTrainingPolling();
 
       } catch (error) {
         trainingPolling = false;
+        modelReady = false;
 
-        setStatus("Trainingsfehler: " + error.message);
-        outputEl.textContent = "Training konnte nicht gestartet werden.";
+        hideProgress();
+
+        setStatus(
+          "Trainingsfehler: " + error.message
+        );
+
+        outputEl.textContent =
+          "Training konnte nicht gestartet werden.";
 
         updateButtons();
       }
     }
 
     async function startTrainingPolling() {
-      if (!trainingPolling) {
-        trainingPolling = true;
-      }
-
       if (startTrainingPolling.running) {
         return;
       }
 
       startTrainingPolling.running = true;
+      trainingPolling = true;
 
       try {
         while (true) {
-          const data = await api("/api/training-state");
+          const data =
+            await api("/api/training-state");
 
-          const progress = Number(data.progress) || 0;
+          const progress =
+            Number(data.progress) || 0;
 
           setProgress(
             progress,
@@ -359,42 +403,74 @@
 
             setStatus(
               "Trainingsfehler: " +
-              (data.error || data.message || "Unbekannter Fehler")
+              (
+                data.error ||
+                data.message ||
+                "Unbekannter Fehler"
+              )
             );
 
             hideProgress();
             updateButtons();
+
             break;
           }
 
-          if (!data.running && data.phase === "finished") {
+          if (
+            !data.running &&
+            data.phase === "finished"
+          ) {
             trainingPolling = false;
 
-            setProgress(100, "Training abgeschlossen");
-            setStatus("Training abgeschlossen. Modell wird geprüft…");
+            setProgress(
+              100,
+              "Training abgeschlossen"
+            );
+
+            setStatus(
+              "Training abgeschlossen. Prüfe Modell…"
+            );
 
             await checkModel();
 
             updateButtons();
+
             break;
           }
 
-          if (!data.running && data.phase === "idle") {
+          if (
+            !data.running &&
+            data.phase === "idle"
+          ) {
             trainingPolling = false;
+
             await checkModel();
+
             updateButtons();
+
             break;
           }
 
-          setStatus(data.message || "Trainiere Modell…");
+          setStatus(
+            data.message ||
+            "Trainiere Modell…"
+          );
 
-          await new Promise(resolve => setTimeout(resolve, 1200));
+          await new Promise(resolve =>
+            setTimeout(resolve, 1000)
+          );
         }
+
       } catch (error) {
         trainingPolling = false;
 
-        setStatus("Fehler beim Abrufen des Trainingsstatus: " + error.message);
+        setStatus(
+          "Fehler beim Trainingsstatus: " +
+          error.message
+        );
+
         updateButtons();
+
       } finally {
         startTrainingPolling.running = false;
       }
@@ -402,8 +478,11 @@
 
     async function checkModel() {
       try {
-        const data = await api("/api/status");
-        const model = data.model || {};
+        const data =
+          await api("/api/status");
+
+        const model =
+          data.model || {};
 
         modelReady =
           model.model === true &&
@@ -411,7 +490,9 @@
           model.config === true;
 
         if (modelReady) {
-          setStatus("Modell bereit. Du kannst jetzt generieren.");
+          setStatus(
+            "Modell bereit. Du kannst jetzt generieren."
+          );
         } else {
           setStatus(
             "Training beendet, aber die Modelldateien sind noch nicht vollständig vorhanden."
@@ -419,24 +500,37 @@
         }
 
         updateButtons();
+
       } catch (error) {
         modelReady = false;
-        setStatus("Modellstatus konnte nicht geprüft werden: " + error.message);
+
+        setStatus(
+          "Modellstatus konnte nicht geprüft werden: " +
+          error.message
+        );
+
         updateButtons();
       }
     }
 
     async function startGeneration() {
-      const prompt = inputEl.value.trim();
+      const prompt =
+        inputEl.value.trim();
 
       if (!prompt) {
-        setStatus("Bitte zuerst einen Prompt eingeben.");
+        setStatus(
+          "Bitte zuerst einen Prompt eingeben."
+        );
+
         inputEl.focus();
         return;
       }
 
       if (!modelReady) {
-        setStatus("Das Modell ist noch nicht bereit.");
+        setStatus(
+          "Das Modell ist noch nicht bereit."
+        );
+
         return;
       }
 
@@ -446,21 +540,28 @@
 
       try {
         generationPolling = true;
-        generateBtn.disabled = true;
+
+        updateButtons();
 
         outputEl.textContent = "";
-        setStatus("Generiere Antwort…");
 
-        const result = await api("/api/generate", {
-          method: "POST",
-          body: JSON.stringify({
-            prompt: prompt
-          })
-        });
+        setStatus(
+          "Generiere Antwort…"
+        );
+
+        const result =
+          await api("/api/generate", {
+            method: "POST",
+
+            body: JSON.stringify({
+              prompt: prompt
+            })
+          });
 
         if (!result.success) {
           throw new Error(
-            result.message || "Generation konnte nicht gestartet werden."
+            result.message ||
+            "Generation konnte nicht gestartet werden."
           );
         }
 
@@ -469,8 +570,13 @@
       } catch (error) {
         generationPolling = false;
 
-        setStatus("Generierungsfehler: " + error.message);
-        outputEl.textContent = "Es konnte keine Antwort erzeugt werden.";
+        setStatus(
+          "Generierungsfehler: " +
+          error.message
+        );
+
+        outputEl.textContent =
+          "Es konnte keine Antwort erzeugt werden.";
 
         updateButtons();
       }
@@ -485,53 +591,74 @@
 
       try {
         while (true) {
-          const data = await api("/api/generate/status");
+          const data =
+            await api("/api/generate/status");
 
           if (data.text) {
-            outputEl.textContent = data.text;
+            outputEl.textContent =
+              data.text;
           }
 
           if (data.error) {
-            throw new Error(data.error);
+            throw new Error(
+              data.error
+            );
           }
 
           if (!data.running) {
             generationPolling = false;
 
             if (data.text) {
-              outputEl.textContent = data.text;
+              outputEl.textContent =
+                data.text;
             }
 
             setStatus("Fertig.");
+
             updateButtons();
+
             break;
           }
 
-          await new Promise(resolve => setTimeout(resolve, 700));
+          await new Promise(resolve =>
+            setTimeout(resolve, 700)
+          );
         }
+
       } finally {
         pollGeneration.running = false;
       }
     }
 
-    trainBtn.addEventListener("click", startTraining);
-    generateBtn.addEventListener("click", startGeneration);
+    trainBtn.addEventListener(
+      "click",
+      startTraining
+    );
 
-    inputEl.addEventListener("keydown", event => {
-      if (
-        event.key === "Enter" &&
-        (event.ctrlKey || event.metaKey)
-      ) {
-        event.preventDefault();
+    generateBtn.addEventListener(
+      "click",
+      startGeneration
+    );
 
-        if (!generateBtn.disabled) {
-          startGeneration();
+    inputEl.addEventListener(
+      "keydown",
+      event => {
+        if (
+          event.key === "Enter" &&
+          (event.ctrlKey || event.metaKey)
+        ) {
+          event.preventDefault();
+
+          if (!generateBtn.disabled) {
+            startGeneration();
+          }
         }
       }
-    });
+    );
 
-    // Beim Laden den echten Zustand vom Render-Server holen.
+    // Beim Laden echten Serverstatus holen.
     loadStatus();
   </script>
 </body>
 </html>
+```
