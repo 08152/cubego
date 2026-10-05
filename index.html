@@ -2,352 +2,337 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Meine KI</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LUMORA</title>
 
 <style>
 *{
     box-sizing:border-box;
 }
 
-body{
+html,body{
     margin:0;
-    height:100vh;
-    background:#fff;
-    color:#1f1f1f;
+    width:100%;
+    height:100%;
+    overflow:hidden;
     font-family:Arial,Helvetica,sans-serif;
+    background:#0b0b0f;
+    color:#fff;
 }
 
-.app{
-    height:100vh;
+body{
+    display:flex;
+}
+
+#app{
+    width:100%;
+    height:100%;
     display:flex;
     flex-direction:column;
 }
 
 /* HEADER */
 
-header{
-    height:68px;
+#header{
+    height:64px;
+    flex-shrink:0;
     display:flex;
     align-items:center;
-    padding:0 24px;
-    border-bottom:1px solid #eee;
-    background:#fff;
+    padding:0 22px;
+    border-bottom:1px solid #24242c;
+    background:#101015;
 }
 
-.logo{
-    width:38px;
-    height:38px;
-    margin-right:12px;
-    border-radius:50%;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:20px;
-    font-weight:bold;
-
-    background:
-        linear-gradient(
-            135deg,
-            #4285f4,
-            #8e7dff 45%,
-            #d965ff 70%,
-            #ff8b8b
-        );
-
-    color:white;
+#logo{
+    font-size:21px;
+    font-weight:800;
+    letter-spacing:1px;
 }
 
-.title{
-    font-size:20px;
-    color:#333;
-}
-
-.status{
+#status{
     margin-left:auto;
-    color:#777;
+    display:flex;
+    align-items:center;
+    gap:8px;
     font-size:13px;
+    color:#9999a5;
+}
+
+#statusDot{
+    width:9px;
+    height:9px;
+    border-radius:50%;
+    background:#777;
+}
+
+#statusDot.online{
+    background:#38d878;
+    box-shadow:0 0 10px #38d878;
+}
+
+#statusDot.error{
+    background:#ff4d5d;
+}
+
+/* MAIN */
+
+#main{
+    flex:1;
+    min-height:0;
+    display:flex;
+}
+
+/* SIDEBAR */
+
+#sidebar{
+    width:260px;
+    flex-shrink:0;
+    border-right:1px solid #24242c;
+    background:#0f0f14;
+    display:flex;
+    flex-direction:column;
+    padding:14px;
+}
+
+#newChat{
+    border:1px solid #34343e;
+    background:#191920;
+    color:#fff;
+    border-radius:10px;
+    padding:12px;
+    cursor:pointer;
+    font-size:14px;
+    text-align:left;
+}
+
+#newChat:hover{
+    background:#22222b;
+}
+
+#sideInfo{
+    margin-top:auto;
+    border-top:1px solid #24242c;
+    padding-top:14px;
+    color:#777782;
+    font-size:12px;
+    line-height:1.6;
+}
+
+#modelStatus{
+    color:#aaaab5;
 }
 
 /* CHAT */
 
-.chat{
+#chatArea{
+    flex:1;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+}
+
+#messages{
     flex:1;
     overflow-y:auto;
-    padding:45px 20px 150px;
+    padding:28px 18px 120px;
 }
 
-.chat-inner{
-    width:100%;
-    max-width:850px;
-    margin:auto;
+.message{
+    width:min(900px,100%);
+    margin:0 auto 25px;
+    display:flex;
+    gap:14px;
 }
 
-/* START */
-
-.empty{
-    min-height:65vh;
+.avatar{
+    width:34px;
+    height:34px;
+    flex-shrink:0;
+    border-radius:9px;
     display:flex;
     justify-content:center;
     align-items:center;
-    flex-direction:column;
-    text-align:center;
+    font-size:13px;
+    font-weight:bold;
+    background:#24242d;
 }
 
-.empty-icon{
-    font-size:64px;
-    margin-bottom:15px;
+.message.user .avatar{
+    background:#343444;
+}
 
-    background:
-        linear-gradient(
-            135deg,
-            #4285f4,
-            #8e7dff,
-            #d65cff,
-            #ff7d7d
-        );
+.message.assistant .avatar{
+    background:#665cff;
+}
 
-    -webkit-background-clip:text;
-    background-clip:text;
-    color:transparent;
+.content{
+    min-width:0;
+    flex:1;
+    line-height:1.65;
+    font-size:15px;
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
+}
+
+.empty{
+    width:min(900px,100%);
+    margin:10vh auto 0;
+    text-align:center;
+    color:#8c8c98;
 }
 
 .empty h1{
-    margin:0;
-    font-size:42px;
-    font-weight:600;
-
-    background:
-        linear-gradient(
-            90deg,
-            #4285f4,
-            #8e7dff,
-            #d65cff
-        );
-
-    -webkit-background-clip:text;
-    background-clip:text;
-    color:transparent;
+    color:#fff;
+    font-size:34px;
+    margin-bottom:10px;
 }
 
 .empty p{
-    color:#777;
-    font-size:17px;
-}
-
-/* NACHRICHTEN */
-
-.message{
-    display:flex;
-    margin:25px 0;
-}
-
-.message.user{
-    justify-content:flex-end;
-}
-
-.bubble{
-    max-width:75%;
-    padding:15px 19px;
-    border-radius:22px;
-    line-height:1.55;
-    white-space:pre-wrap;
-    word-break:break-word;
-    font-size:16px;
-}
-
-.user .bubble{
-    background:#f0f1f3;
-    color:#202124;
-    border-bottom-right-radius:6px;
-}
-
-.ai .bubble{
-    background:transparent;
-    color:#303030;
-    padding-left:5px;
-}
-
-/* KI ICON */
-
-.ai{
-    align-items:flex-start;
-}
-
-.ai::before{
-    content:"✦";
-    min-width:30px;
-    height:30px;
-    margin-right:9px;
-    margin-top:4px;
-
-    display:flex;
-    align-items:center;
-    justify-content:center;
-
-    font-size:18px;
-
-    background:
-        linear-gradient(
-            135deg,
-            #4285f4,
-            #9b7cff,
-            #e56cff,
-            #ff8b8b
-        );
-
-    -webkit-background-clip:text;
-    background-clip:text;
-    color:transparent;
+    margin:0;
 }
 
 /* INPUT */
 
-.input-area{
-    position:fixed;
-    bottom:0;
-    left:0;
-    right:0;
-
-    padding:18px 20px 22px;
-
-    background:
-        linear-gradient(
-            transparent,
-            rgba(255,255,255,.96) 30%
-        );
+#inputArea{
+    position:relative;
+    padding:14px 18px 18px;
+    background:linear-gradient(
+        to top,
+        #0b0b0f 70%,
+        transparent
+    );
 }
 
-.input-container{
-    max-width:850px;
+#composer{
+    width:min(900px,100%);
     margin:auto;
+    position:relative;
 }
 
-.input-box{
-    display:flex;
-    align-items:flex-end;
-    gap:10px;
-
-    padding:9px 10px 9px 18px;
-
-    background:#f5f6f7;
-
-    border:1px solid #e1e3e6;
-
-    border-radius:28px;
-
-    box-shadow:
-        0 2px 10px rgba(0,0,0,.05);
-
-    transition:.2s;
-}
-
-.input-box:focus-within{
-    background:#fff;
-
-    border-color:#c8c9cc;
-
-    box-shadow:
-        0 3px 16px rgba(0,0,0,.08);
-}
-
-textarea{
-    flex:1;
-
-    border:0;
-    outline:0;
-
+#prompt{
+    width:100%;
+    min-height:58px;
+    max-height:180px;
     resize:none;
-
-    background:transparent;
-
-    color:#222;
-
-    font-size:16px;
-
-    line-height:1.4;
-
-    padding:10px 0;
-
-    min-height:42px;
-    max-height:140px;
-
-    font-family:Arial,Helvetica,sans-serif;
+    border:1px solid #34343e;
+    outline:none;
+    border-radius:16px;
+    background:#17171e;
+    color:#fff;
+    padding:17px 58px 17px 17px;
+    font:15px Arial,sans-serif;
+    line-height:1.5;
 }
 
-textarea::placeholder{
-    color:#777;
+#prompt:focus{
+    border-color:#665cff;
+    box-shadow:0 0 0 2px rgba(102,92,255,.12);
 }
 
-/* SEND BUTTON */
-
-.send{
-    width:45px;
-    height:45px;
-
-    flex-shrink:0;
-
+#send{
+    position:absolute;
+    right:9px;
+    bottom:9px;
+    width:40px;
+    height:40px;
     border:0;
-
-    border-radius:50%;
-
-    background:#1f1f1f;
-
-    color:white;
-
-    font-size:18px;
-
+    border-radius:11px;
+    background:#665cff;
+    color:#fff;
     cursor:pointer;
-
-    transition:.2s;
+    font-size:17px;
 }
 
-.send:hover{
-    transform:scale(1.05);
+#send:hover{
+    background:#776eff;
 }
 
-.send:active{
-    transform:scale(.94);
+#send:disabled{
+    opacity:.45;
+    cursor:not-allowed;
 }
 
-.send.disabled{
-    background:#ddd;
-    color:#999;
+#hint{
+    text-align:center;
+    color:#656570;
+    font-size:11px;
+    margin-top:8px;
 }
 
-/* SCROLLBAR */
+/* LOADING */
 
-.chat::-webkit-scrollbar{
-    width:8px;
+.typing{
+    color:#92929d;
 }
 
-.chat::-webkit-scrollbar-thumb{
-    background:#ddd;
-    border-radius:10px;
+.dot{
+    display:inline-block;
+    animation:blink 1.2s infinite;
+}
+
+.dot:nth-child(2){
+    animation-delay:.15s;
+}
+
+.dot:nth-child(3){
+    animation-delay:.3s;
+}
+
+@keyframes blink{
+    0%,80%,100%{
+        opacity:.25;
+    }
+    40%{
+        opacity:1;
+    }
 }
 
 /* MOBILE */
 
-@media(max-width:600px){
+@media(max-width:700px){
 
-    header{
-        padding:0 16px;
+    #sidebar{
+        display:none;
     }
 
-    .chat{
-        padding:30px 12px 140px;
+    #header{
+        height:56px;
+        padding:0 15px;
+    }
+
+    #messages{
+        padding:20px 12px 110px;
+    }
+
+    .message{
+        gap:10px;
+    }
+
+    .avatar{
+        width:30px;
+        height:30px;
+        border-radius:8px;
+        font-size:11px;
+    }
+
+    .content{
+        font-size:14px;
+    }
+
+    #inputArea{
+        padding:10px 10px 13px;
+    }
+
+    #prompt{
+        border-radius:14px;
+    }
+
+    .empty{
+        margin-top:18vh;
     }
 
     .empty h1{
-        font-size:34px;
-    }
-
-    .bubble{
-        max-width:88%;
-    }
-
-    .input-area{
-        padding:12px;
+        font-size:29px;
     }
 }
 </style>
@@ -355,163 +340,453 @@ textarea::placeholder{
 
 <body>
 
-<div class="app">
+<div id="app">
 
-<header>
+    <header id="header">
+        <div id="logo">LUMORA</div>
 
-    <div class="logo">✦</div>
-
-    <div class="title">
-        Meine KI
-    </div>
-
-    <div class="status">
-        Bereit
-    </div>
-
-</header>
-
-<main class="chat" id="chat">
-
-    <div class="chat-inner" id="chatInner">
-
-        <div class="empty" id="empty">
-
-            <div class="empty-icon">✦</div>
-
-            <h1>Hallo!</h1>
-
-            <p>Wie kann ich dir helfen?</p>
-
+        <div id="status">
+            <span id="statusDot"></span>
+            <span id="statusText">Verbinde...</span>
         </div>
+    </header>
 
-    </div>
+    <main id="main">
 
-</main>
+        <aside id="sidebar">
 
-<div class="input-area">
+            <button id="newChat">
+                ＋ Neuer Chat
+            </button>
 
-    <div class="input-container">
+            <div id="sideInfo">
+                <div>Lokale KI</div>
+                <div id="modelStatus">Modell wird geprüft...</div>
+            </div>
 
-        <div class="input-box">
+        </aside>
 
-            <textarea
-                id="input"
-                rows="1"
-                placeholder="Frag mich etwas..."
-            ></textarea>
+        <section id="chatArea">
 
-            <button
-                class="send disabled"
-                id="send"
-            >↑</button>
+            <div id="messages">
 
-        </div>
+                <div class="empty" id="empty">
 
-    </div>
+                    <h1>LUMORA</h1>
 
-</div>
+                    <p>
+                        Was möchtest du wissen?
+                    </p>
+
+                </div>
+
+            </div>
+
+            <div id="inputArea">
+
+                <div id="composer">
+
+                    <textarea
+                        id="prompt"
+                        placeholder="Nachricht an LUMORA..."
+                        autocomplete="off"
+                        spellcheck="true"
+                    ></textarea>
+
+                    <button id="send" title="Senden">
+                        ↑
+                    </button>
+
+                </div>
+
+                <div id="hint">
+                    LUMORA läuft über deinen lokalen Server.
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
 
 </div>
 
 <script>
 
-const input = document.getElementById("input");
-const send = document.getElementById("send");
-const chatInner = document.getElementById("chatInner");
+"use strict";
+
+const messages = document.getElementById("messages");
 const empty = document.getElementById("empty");
+const promptInput = document.getElementById("prompt");
+const sendButton = document.getElementById("send");
 
-function updateButton(){
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+const modelStatus = document.getElementById("modelStatus");
+const newChat = document.getElementById("newChat");
 
-    if(input.value.trim()){
-        send.classList.remove("disabled");
-    }else{
-        send.classList.add("disabled");
+let history = [];
+let generating = false;
+
+
+// ============================================================
+// STATUS
+// ============================================================
+
+async function checkServer(){
+
+    try{
+
+        const response = await fetch("/api/status",{
+            cache:"no-store"
+        });
+
+        if(!response.ok){
+            throw new Error("Server offline");
+        }
+
+        const data = await response.json();
+
+        statusDot.className = "online";
+        statusText.textContent = "Online";
+
+        if(data.modelExists){
+
+            modelStatus.textContent =
+                "Modell: bereit";
+
+        }else{
+
+            modelStatus.textContent =
+                "Modell: noch nicht trainiert";
+
+        }
+
+    }catch(error){
+
+        statusDot.className = "error";
+        statusText.textContent = "Offline";
+
+        modelStatus.textContent =
+            "Server nicht erreichbar";
+
     }
+
 }
 
-input.addEventListener("input",function(){
 
-    this.style.height="42px";
+// ============================================================
+// MESSAGE
+// ============================================================
 
-    this.style.height =
-        Math.min(this.scrollHeight,140)+"px";
+function addMessage(role,text){
 
-    updateButton();
+    empty.style.display = "none";
 
-});
-
-function addMessage(text,type){
-
-    if(empty){
-        empty.remove();
-    }
-
-    const message =
-        document.createElement("div");
+    const message = document.createElement("div");
 
     message.className =
-        "message "+type;
+        "message " +
+        (role === "user"
+            ? "user"
+            : "assistant");
 
-    const bubble =
-        document.createElement("div");
+    const avatar = document.createElement("div");
 
-    bubble.className="bubble";
+    avatar.className = "avatar";
 
-    bubble.textContent=text;
+    avatar.textContent =
+        role === "user"
+            ? "DU"
+            : "L";
 
-    message.appendChild(bubble);
+    const content = document.createElement("div");
 
-    chatInner.appendChild(message);
+    content.className = "content";
 
-    document.querySelector(".chat").scrollTop =
-        document.querySelector(".chat").scrollHeight;
+    content.textContent = text;
+
+    message.appendChild(avatar);
+    message.appendChild(content);
+
+    messages.appendChild(message);
+
+    messages.scrollTop =
+        messages.scrollHeight;
+
+    return {
+        message,
+        content
+    };
 }
 
-function sendMessage(){
 
-    const text=input.value.trim();
+// ============================================================
+// TYPING
+// ============================================================
 
-    if(!text)return;
+function addTyping(){
 
-    addMessage(text,"user");
+    empty.style.display = "none";
 
-    input.value="";
-    input.style.height="42px";
+    const message = document.createElement("div");
 
-    updateButton();
+    message.className =
+        "message assistant";
 
-    /*
-        HIER WIRD SPÄTER DEINE EIGENE KI
-        ANGESCHLOSSEN.
+    const avatar = document.createElement("div");
 
-        Beispiel:
+    avatar.className = "avatar";
+    avatar.textContent = "L";
 
-        const antwort =
-            await meineKI(text);
+    const content = document.createElement("div");
 
-        addMessage(antwort,"ai");
-    */
+    content.className =
+        "content typing";
+
+    content.innerHTML =
+        'LUMORA denkt <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>';
+
+    message.appendChild(avatar);
+    message.appendChild(content);
+
+    messages.appendChild(message);
+
+    messages.scrollTop =
+        messages.scrollHeight;
+
+    return {
+        message,
+        content
+    };
 }
 
-send.addEventListener("click",sendMessage);
 
-input.addEventListener("keydown",function(e){
+// ============================================================
+// GENERATE
+// ============================================================
 
-    if(
-        e.key==="Enter" &&
-        !e.shiftKey
-    ){
+async function generate(){
 
-        e.preventDefault();
+    if(generating) return;
 
-        sendMessage();
+    const text =
+        promptInput.value.trim();
+
+    if(!text) return;
+
+    generating = true;
+
+    sendButton.disabled = true;
+    promptInput.disabled = true;
+
+    addMessage("user",text);
+
+    history.push({
+        role:"user",
+        content:text
+    });
+
+    promptInput.value = "";
+
+    const typing = addTyping();
+
+    try{
+
+        const response = await fetch(
+            "/api/generate",
+            {
+                method:"POST",
+
+                headers:{
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body:JSON.stringify({
+
+                    prompt:text,
+
+                    history:history.slice(
+                        -20
+                    ),
+
+                    systemPrompt:
+                        "Du bist LUMORA, eine lokale KI. Antworte hilfreich, klar und auf Deutsch.",
+
+                    maxTokens:160,
+
+                    temperature:.82,
+
+                    topK:40,
+
+                    topP:.92,
+
+                    repetitionPenalty:1.08
+
+                })
+            }
+        );
+
+        const data =
+            await response.json();
+
+        typing.message.remove();
+
+        if(!response.ok || !data.ok){
+
+            const errorText =
+                data.error ||
+                "LUMORA konnte keine Antwort erzeugen.";
+
+            addMessage(
+                "assistant",
+                "Fehler: " + errorText
+            );
+
+            return;
+        }
+
+        const answer =
+            typeof data.answer === "string"
+                ? data.answer.trim()
+                : "";
+
+        if(!answer){
+
+            addMessage(
+                "assistant",
+                "LUMORA hat keine Antwort erzeugt."
+            );
+
+            return;
+        }
+
+        addMessage(
+            "assistant",
+            answer
+        );
+
+        history.push({
+            role:"assistant",
+            content:answer
+        });
+
+    }catch(error){
+
+        typing.message.remove();
+
+        addMessage(
+            "assistant",
+            "Verbindungsfehler: " +
+            error.message
+        );
+
+        statusDot.className = "error";
+        statusText.textContent = "Fehler";
+
+    }finally{
+
+        generating = false;
+
+        sendButton.disabled = false;
+        promptInput.disabled = false;
+
+        promptInput.focus();
+
+        checkServer();
+    }
+}
+
+
+// ============================================================
+// ENTER
+// ============================================================
+
+promptInput.addEventListener(
+    "keydown",
+    event => {
+
+        if(
+            event.key === "Enter" &&
+            !event.shiftKey
+        ){
+
+            event.preventDefault();
+
+            generate();
+        }
 
     }
+);
 
-});
 
-updateButton();
+// ============================================================
+// BUTTON
+// ============================================================
+
+sendButton.addEventListener(
+    "click",
+    generate
+);
+
+
+// ============================================================
+// NEW CHAT
+// ============================================================
+
+newChat.addEventListener(
+    "click",
+    () => {
+
+        history = [];
+
+        messages.innerHTML = "";
+
+        messages.appendChild(empty);
+
+        empty.style.display = "block";
+
+        promptInput.value = "";
+
+        promptInput.focus();
+    }
+);
+
+
+// ============================================================
+// AUTO RESIZE
+// ============================================================
+
+promptInput.addEventListener(
+    "input",
+    () => {
+
+        promptInput.style.height =
+            "auto";
+
+        promptInput.style.height =
+            Math.min(
+                promptInput.scrollHeight,
+                180
+            ) + "px";
+
+    }
+);
+
+
+// ============================================================
+// START
+// ============================================================
+
+checkServer();
+
+setInterval(
+    checkServer,
+    5000
+);
+
+promptInput.focus();
 
 </script>
 
