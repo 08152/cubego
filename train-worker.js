@@ -1,52 +1,23 @@
 "use strict";
 
-/*
-================================================================
-  train-worker.js
-  LUMORA
-
-  - lädt ALLE JSON-Dateien aus DATEN/
-  - durchsucht JSON rekursiv nach Frage/Antwort
-  - entfernt doppelte Beispiele
-  - verwendet den LUMORA-Tokenizer
-  - verwendet die tatsächliche Tokenizer-Vokabulargröße
-  - kleines Modell für Render
-  - speichert Modell + Tokenizer + Config
-================================================================
-*/
-
 const fs = require("fs");
 const path = require("path");
-const {
-    parentPort,
-    workerData
-} = require("worker_threads");
-
-
-/* =========================================================
-   PFADE
-   ========================================================= */
+const { parentPort, workerData } = require("worker_threads");
 
 const ROOT =
-    workerData.root || __dirname;
+    workerData.root ||
+    __dirname;
 
 const DATEN =
     workerData.daten ||
-    path.join(
-        ROOT,
-        "DATEN"
-    );
+    path.join(ROOT, "DATEN");
 
 const GELERNT =
     workerData.gelernt ||
-    path.join(
-        ROOT,
-        "GELERNT"
-    );
+    path.join(ROOT, "GELERNT");
 
 const OPTIONS =
     workerData.options || {};
-
 
 const MODEL_FILE =
     path.join(
@@ -72,15 +43,14 @@ const STATE_FILE =
         "training-state.json"
     );
 
+let stopRequested = false;
+
 
 /* =========================================================
    STOP
-   ========================================================= */
-
-let stopRequested = false;
+========================================================= */
 
 if (parentPort) {
-
     parentPort.on(
         "message",
         message => {
@@ -88,22 +58,22 @@ if (parentPort) {
             if (
                 message &&
                 (
-                    message.type === "stop" ||
-                    message.action === "stop"
+                    message.type ===
+                    "stop" ||
+                    message.action ===
+                    "stop"
                 )
             ) {
                 stopRequested = true;
             }
-
         }
     );
-
 }
 
 
 /* =========================================================
-   KOMMUNIKATION
-   ========================================================= */
+   MESSAGE
+========================================================= */
 
 function send(
     type,
@@ -118,13 +88,12 @@ function send(
         type,
         ...data
     });
-
 }
 
 
 /* =========================================================
-   JSON
-   ========================================================= */
+   DATEI
+========================================================= */
 
 function writeJSON(
     file,
@@ -134,12 +103,14 @@ function writeJSON(
     fs.mkdirSync(
         path.dirname(file),
         {
-            recursive: true
+            recursive:
+                true
         }
     );
 
     const temp =
-        file + ".tmp";
+        file +
+        ".tmp";
 
     fs.writeFileSync(
         temp,
@@ -155,7 +126,6 @@ function writeJSON(
         temp,
         file
     );
-
 }
 
 
@@ -169,13 +139,12 @@ function readJSON(
             "utf8"
         )
     );
-
 }
 
 
 /* =========================================================
    DATEN
-   ========================================================= */
+========================================================= */
 
 function getDataFiles() {
 
@@ -188,184 +157,315 @@ function getDataFiles() {
         fs.mkdirSync(
             DATEN,
             {
-                recursive: true
+                recursive:
+                    true
             }
         );
 
         return [];
+    }
 
+    const result = [];
+
+
+    function scanDirectory(
+        directory
+    ) {
+
+        let entries;
+
+        try {
+
+            entries =
+                fs.readdirSync(
+                    directory,
+                    {
+                        withFileTypes:
+                            true
+                    }
+                );
+
+        } catch (error) {
+
+            console.error(
+                "[DATEN] Ordner konnte nicht gelesen werden:",
+                directory,
+                error.message
+            );
+
+            return;
+        }
+
+
+        for (
+            const entry of
+            entries
+        ) {
+
+            const fullPath =
+                path.join(
+                    directory,
+                    entry.name
+                );
+
+
+            if (
+                entry.isDirectory()
+            ) {
+
+                scanDirectory(
+                    fullPath
+                );
+
+                continue;
+            }
+
+
+            if (
+                entry.isFile() &&
+                entry.name
+                    .toLowerCase()
+                    .endsWith(".json")
+            ) {
+
+                result.push(
+                    fullPath
+                );
+            }
+        }
     }
 
 
-    return fs.readdirSync(
-        DATEN,
-        {
-            withFileTypes: true
-        }
-    )
+    scanDirectory(
+        DATEN
+    );
 
-    .filter(
-        entry =>
-            entry.isFile() &&
-            entry.name
-                .toLowerCase()
-                .endsWith(".json")
-    )
 
-    .map(
-        entry =>
-            entry.name
-    )
-
-    .sort(
+    result.sort(
         (a, b) =>
             a.localeCompare(
                 b,
                 "de",
                 {
-                    numeric: true,
-                    sensitivity: "base"
+                    numeric:
+                        true,
+                    sensitivity:
+                        "base"
                 }
             )
     );
 
+
+    return result;
 }
 
 
 /* =========================================================
-   TRAININGSDATEN LADEN
-   ========================================================= */
+   JSON → FRAGE / ANTWORT
+========================================================= */
 
-function loadTrainingExamples() {
+function extractExamples(
+    value,
+    output = []
+) {
 
-    const files =
-        getDataFiles();
+    if (
+        value === null ||
+        value === undefined
+    ) {
 
-    const examples = [];
+        return output;
+    }
+
+
+    if (
+        Array.isArray(value)
+    ) {
+
+        for (
+            const item of
+            value
+        ) {
+
+            if (stopRequested) {
+                return output;
+            }
+
+            extractExamples(
+                item,
+                output
+            );
+        }
+
+        return output;
+    }
+
+
+    if (
+        typeof value !==
+        "object"
+    ) {
+
+        return output;
+    }
 
 
     const questionKeys = [
         "frage",
         "question",
-        "user",
+        "prompt",
         "input",
-        "prompt"
+        "user"
     ];
 
 
     const answerKeys = [
         "antwort",
         "answer",
-        "assistant",
+        "response",
         "output",
-        "response"
+        "assistant"
     ];
 
 
-    function scan(
-        value
+    let question = null;
+    let answer = null;
+
+
+    for (
+        const key of
+        Object.keys(value)
     ) {
 
-        if (stopRequested) {
-            return;
-        }
+        const lower =
+            key
+                .toLowerCase()
+                .trim();
 
 
         if (
-            Array.isArray(
-                value
+            questionKeys.includes(
+                lower
             )
         ) {
 
-            for (
-                const item of value
-            ) {
-                scan(item);
-            }
-
-            return;
-        }
-
-
-        if (
-            !value ||
-            typeof value !== "object"
-        ) {
-            return;
-        }
-
-
-        let question = null;
-        let answer = null;
-
-
-        for (
-            const key of
-            Object.keys(value)
-        ) {
-
-            const lower =
-                key.toLowerCase();
-
-
             if (
-                questionKeys.includes(
-                    lower
-                )
+                typeof value[key] ===
+                "string"
             ) {
+
                 question =
                     value[key];
             }
-
-
-            if (
-                answerKeys.includes(
-                    lower
-                )
-            ) {
-                answer =
-                    value[key];
-            }
-
         }
 
 
         if (
-            typeof question === "string" &&
-            typeof answer === "string" &&
-            question.trim() &&
-            answer.trim()
+            answerKeys.includes(
+                lower
+            )
         ) {
 
-            examples.push({
+            if (
+                typeof value[key] ===
+                "string"
+            ) {
 
+                answer =
+                    value[key];
+            }
+        }
+    }
+
+
+    if (
+        typeof question ===
+            "string" &&
+        typeof answer ===
+            "string"
+    ) {
+
+        const q =
+            question
+                .replace(
+                    /\s+/g,
+                    " "
+                )
+                .trim();
+
+
+        const a =
+            answer
+                .trim();
+
+
+        if (
+            q.length > 0 &&
+            a.length > 0
+        ) {
+
+            output.push({
                 question:
-                    question.trim(),
-
+                    q,
                 answer:
-                    answer.trim()
-
+                    a
             });
-
         }
-
-
-        for (
-            const key of
-            Object.keys(value)
-        ) {
-
-            scan(
-                value[key]
-            );
-
-        }
-
     }
 
 
     for (
-        const filename of files
+        const key of
+        Object.keys(value)
+    ) {
+
+        if (stopRequested) {
+            break;
+        }
+
+        const child =
+            value[key];
+
+
+        if (
+            child &&
+            typeof child ===
+                "object"
+        ) {
+
+            extractExamples(
+                child,
+                output
+            );
+        }
+    }
+
+
+    return output;
+}
+
+
+/* =========================================================
+   TRAININGSDATEN LADEN
+========================================================= */
+
+function loadTrainingExamples() {
+
+    const files =
+        getDataFiles();
+
+    const rawExamples =
+        [];
+
+    const validFiles =
+        [];
+
+    const failedFiles =
+        [];
+
+
+    for (
+        const file of files
     ) {
 
         if (stopRequested) {
@@ -373,110 +473,143 @@ function loadTrainingExamples() {
         }
 
 
-        const file =
-            path.join(
-                DATEN,
-                filename
-            );
-
-
-        let raw;
-
         try {
 
-            raw =
+            const raw =
                 fs.readFileSync(
                     file,
                     "utf8"
                 );
 
-        } catch (error) {
 
-            console.error(
-                "Datei konnte nicht gelesen werden:",
-                filename,
-                error.message
-            );
+            if (
+                !raw.trim()
+            ) {
 
-            continue;
+                continue;
+            }
 
-        }
-
-
-        try {
 
             const parsed =
                 JSON.parse(
                     raw
                 );
 
-            scan(parsed);
+
+            const before =
+                rawExamples.length;
+
+
+            extractExamples(
+                parsed,
+                rawExamples
+            );
+
+
+            if (
+                rawExamples.length >
+                before
+            ) {
+
+                validFiles.push(
+                    file
+                );
+            }
+
 
         } catch (error) {
 
+            failedFiles.push({
+                file,
+                error:
+                    error.message
+            });
+
+
             console.error(
-                "JSON konnte nicht verarbeitet werden:",
-                filename,
+                "[DATEN] Fehler:",
+                file,
                 error.message
             );
-
         }
-
     }
 
 
     /*
-     * Doppelte Beispiele entfernen.
-     */
+      Duplikate entfernen
+    */
 
-    const unique = [];
-    const seen = new Set();
+    const examples =
+        [];
+
+    const seen =
+        new Set();
 
 
     for (
-        const example of examples
+        const example of
+        rawExamples
     ) {
 
-        const id =
-            example.question +
+        const question =
+            example.question
+                .toLowerCase()
+                .replace(
+                    /\s+/g,
+                    " "
+                )
+                .trim();
+
+
+        const answer =
+            example.answer
+                .replace(
+                    /\s+/g,
+                    " "
+                )
+                .trim();
+
+
+        const key =
+            question +
             "\n" +
-            example.answer;
+            answer;
 
 
         if (
-            !seen.has(id)
+            seen.has(key)
         ) {
-
-            seen.add(id);
-
-            unique.push(
-                example
-            );
-
+            continue;
         }
 
+
+        seen.add(key);
+
+
+        examples.push({
+            question:
+                example.question,
+            answer
+        });
     }
 
 
     return {
-
         files,
-
-        examples:
-            unique
-
+        validFiles,
+        failedFiles,
+        examples
     };
-
 }
 
 
 /* =========================================================
    TOKENIZER
-   ========================================================= */
+========================================================= */
 
 function loadTokenizer() {
 
-    const tokenizerFile =
+    const tokenizerModule =
         path.join(
             ROOT,
             "tokenizer.js"
@@ -485,27 +618,26 @@ function loadTokenizer() {
 
     if (
         !fs.existsSync(
-            tokenizerFile
+            tokenizerModule
         )
     ) {
 
         throw new Error(
             "tokenizer.js wurde nicht gefunden."
         );
-
     }
 
 
     delete require.cache[
         require.resolve(
-            tokenizerFile
+            tokenizerModule
         )
     ];
 
 
     const loaded =
         require(
-            tokenizerFile
+            tokenizerModule
         );
 
 
@@ -517,12 +649,12 @@ function loadTokenizer() {
 
     if (
         AdvancedTokenizer &&
-        typeof AdvancedTokenizer.create ===
-        "function"
+        typeof
+            AdvancedTokenizer.create ===
+            "function"
     ) {
 
         return AdvancedTokenizer.create();
-
     }
 
 
@@ -532,22 +664,85 @@ function loadTokenizer() {
     ) {
 
         return new AdvancedTokenizer();
-
     }
 
 
     throw new Error(
         "AdvancedTokenizer konnte nicht erstellt werden."
     );
+}
 
+
+/* =========================================================
+   TOKENIZER EXISTIEREND LADEN
+========================================================= */
+
+function loadExistingTokenizer() {
+
+    if (
+        !fs.existsSync(
+            TOKENIZER_FILE
+        )
+    ) {
+
+        return null;
+    }
+
+
+    try {
+
+        const tokenizer =
+            loadTokenizer();
+
+
+        const data =
+            readJSON(
+                TOKENIZER_FILE
+            );
+
+
+        if (
+            typeof tokenizer.import ===
+            "function"
+        ) {
+
+            tokenizer.import(
+                data
+            );
+
+            return tokenizer;
+        }
+
+
+        if (
+            typeof tokenizer.fromJSON ===
+            "function"
+        ) {
+
+            return tokenizer.fromJSON(
+                data
+            );
+        }
+
+
+    } catch (error) {
+
+        console.warn(
+            "[TOKENIZER] Vorhandener Tokenizer konnte nicht geladen werden:",
+            error.message
+        );
+    }
+
+
+    return null;
 }
 
 
 /* =========================================================
    TOKENIZER TRAINING
-   ========================================================= */
+========================================================= */
 
-async function trainTokenizerSafe(
+async function prepareTokenizer(
     tokenizer,
     examples
 ) {
@@ -555,7 +750,6 @@ async function trainTokenizerSafe(
     send(
         "progress",
         {
-
             phase:
                 "tokenizer",
 
@@ -564,7 +758,6 @@ async function trainTokenizerSafe(
 
             message:
                 "Tokenizer wird vorbereitet..."
-
         }
     );
 
@@ -577,149 +770,93 @@ async function trainTokenizerSafe(
     const texts =
         examples.map(
             example =>
-                "<|user|>\n" +
-                example.question +
-                "\n<|end|>\n" +
-                "<|assistant|>\n" +
-                example.answer +
-                "\n<|end|>"
+                (
+                    "<|user|>\n" +
+                    example.question +
+                    "\n<|end|>\n" +
+                    "<|assistant|>\n" +
+                    example.answer +
+                    "\n<|end|>"
+                )
         );
 
 
     /*
-     * Bei kleinen Datensätzen kein BPE.
-     * Der Tokenizer verwendet dann seine
-     * Zeichen-/Byte-Fallbacks.
-     */
+      Bestehenden Tokenizer behalten.
+      Das verhindert, dass die Token-IDs bei jedem
+      Training komplett verändert werden.
+    */
+
+    const existing =
+        loadExistingTokenizer();
+
+
+    if (existing) {
+
+        send(
+            "progress",
+            {
+                phase:
+                    "tokenizer",
+
+                progress:
+                    100,
+
+                message:
+                    "Vorhandener Tokenizer wurde geladen."
+            }
+        );
+
+        return existing;
+    }
+
+
+    /*
+      Nur bei ausreichend Daten BPE trainieren.
+      Bei kleinen Datenmengen ist der vorhandene
+      Basis-Tokenizer besser.
+    */
 
     if (
+        texts.length >= 100 &&
         typeof tokenizer.trainBPE ===
-        "function"
+            "function"
     ) {
 
-        if (
-            texts.length >= 100
-        ) {
+        send(
+            "progress",
+            {
+                phase:
+                    "tokenizer",
 
-            send(
-                "progress",
-                {
+                progress:
+                    25,
 
-                    phase:
-                        "tokenizer",
-
-                    progress:
-                        20,
-
-                    message:
-                        "BPE-Tokenizer wird trainiert..."
-
-                }
-            );
-
-
-            try {
-
-                await Promise.race([
-
-                    Promise.resolve(
-                        tokenizer.trainBPE(
-                            texts
-                        )
-                    ),
-
-                    new Promise(
-                        (_, reject) => {
-
-                            setTimeout(
-                                () => {
-
-                                    reject(
-                                        new Error(
-                                            "BPE-Training Timeout"
-                                        )
-                                    );
-
-                                },
-                                30000
-                            );
-
-                        }
-                    )
-
-                ]);
-
-
-                send(
-                    "progress",
-                    {
-
-                        phase:
-                            "tokenizer",
-
-                        progress:
-                            70,
-
-                        message:
-                            "BPE-Training abgeschlossen."
-
-                    }
-                );
-
-
-            } catch (error) {
-
-                console.warn(
-                    "BPE übersprungen:",
-                    error.message
-                );
-
-
-                send(
-                    "progress",
-                    {
-
-                        phase:
-                            "tokenizer",
-
-                        progress:
-                            70,
-
-                        message:
-                            "BPE fehlgeschlagen – vorhandener Tokenizer wird verwendet."
-
-                    }
-                );
-
+                message:
+                    "BPE-Tokenizer wird trainiert..."
             }
+        );
 
-        } else {
 
-            send(
-                "progress",
-                {
+        try {
 
-                    phase:
-                        "tokenizer",
-
-                    progress:
-                        70,
-
-                    message:
-                        "Kleiner Datensatz – BPE wird übersprungen."
-
-                }
+            await tokenizer.trainBPE(
+                texts
             );
 
-        }
+        } catch (error) {
 
+            console.warn(
+                "[TOKENIZER] BPE fehlgeschlagen:",
+                error.message
+            );
+        }
     }
 
 
     send(
         "progress",
         {
-
             phase:
                 "tokenizer",
 
@@ -728,19 +865,17 @@ async function trainTokenizerSafe(
 
             message:
                 "Tokenizer bereit."
-
         }
     );
 
 
     return tokenizer;
-
 }
 
 
 /* =========================================================
-   TOKENIZER SPEICHERN
-   ========================================================= */
+   TOKENIZER EXPORT
+========================================================= */
 
 function exportTokenizer(
     tokenizer
@@ -757,9 +892,7 @@ function exportTokenizer(
         data =
             tokenizer.export();
 
-    }
-
-    else if (
+    } else if (
         typeof tokenizer.toJSON ===
         "function"
     ) {
@@ -767,14 +900,11 @@ function exportTokenizer(
         data =
             tokenizer.toJSON();
 
-    }
-
-    else {
+    } else {
 
         throw new Error(
-            "Tokenizer kann nicht exportiert werden."
+            "Tokenizer besitzt keine Exportfunktion."
         );
-
     }
 
 
@@ -782,64 +912,57 @@ function exportTokenizer(
         TOKENIZER_FILE,
         data
     );
-
 }
 
 
 /* =========================================================
-   ECHTE VOKABULARGRÖSSE
-   ========================================================= */
+   VOCAB SIZE
+========================================================= */
 
-function getTokenizerVocabSize(
+function getVocabSize(
     tokenizer
 ) {
 
-    /*
-     * Das ist wichtig:
-     *
-     * Der LUMORA-Tokenizer besitzt keine
-     * feste tokenizer.vocabSize-Eigenschaft.
-     *
-     * Die tatsächliche Größe steht in
-     * tokenizer.vocabulary.length.
-     */
+    const candidates = [
+        tokenizer?.vocabSize,
+        tokenizer?.vocabulary?.length,
+        tokenizer?.vocab?.length,
+        tokenizer?.idToToken?.size
+    ];
 
-    if (
-        tokenizer &&
-        Array.isArray(
-            tokenizer.vocabulary
-        )
+
+    for (
+        const value of
+        candidates
     ) {
 
-        return tokenizer.vocabulary.length;
+        const n =
+            Number(
+                value
+            );
 
+
+        if (
+            Number.isInteger(n) &&
+            n > 0
+        ) {
+
+            return n;
+        }
     }
 
 
-    if (
-        tokenizer &&
-        tokenizer.idToToken instanceof Map
-    ) {
-
-        return tokenizer.idToToken.size;
-
-    }
-
-
-    throw new Error(
-        "Die tatsächliche Tokenizer-Vokabulargröße konnte nicht ermittelt werden."
-    );
-
+    return 8192;
 }
 
 
 /* =========================================================
-   MODELL
-   ========================================================= */
+   MODELL LADEN
+========================================================= */
 
 function loadModelClass() {
 
-    const modelFile =
+    const modelModule =
         path.join(
             ROOT,
             "model.js"
@@ -848,32 +971,32 @@ function loadModelClass() {
 
     if (
         !fs.existsSync(
-            modelFile
+            modelModule
         )
     ) {
 
         throw new Error(
             "model.js wurde nicht gefunden."
         );
-
     }
 
 
     delete require.cache[
         require.resolve(
-            modelFile
+            modelModule
         )
     ];
 
 
     const loaded =
         require(
-            modelFile
+            modelModule
         );
 
 
     const Model =
         loaded.LanguageModel ||
+        loaded.LargeLanguageModel ||
         loaded.default ||
         loaded;
 
@@ -886,14 +1009,16 @@ function loadModelClass() {
         throw new Error(
             "LanguageModel konnte nicht geladen werden."
         );
-
     }
 
 
     return Model;
-
 }
 
+
+/* =========================================================
+   MODELL ERSTELLEN
+========================================================= */
 
 function createModel(
     tokenizer
@@ -903,146 +1028,98 @@ function createModel(
         loadModelClass();
 
 
-    /*
-     * WICHTIG:
-     * Niemals wieder blind 8192 verwenden.
-     */
-
     const vocabSize =
-        getTokenizerVocabSize(
+        getVocabSize(
             tokenizer
         );
 
 
     /*
-     * Kleines Modell für Render.
-     *
-     * embeddingSize =
-     * heads * headSize
-     *
-     * 32 = 1 * 32
-     */
+      LUMORA LARGE
+
+      Deutlich größer als die alte Version.
+    */
 
     const config = {
+
+        modelType:
+            "LUMORA-LARGE",
 
         vocabSize,
 
         contextSize:
-            Math.max(
-                8,
-                Math.min(
-                    128,
-                    Number(
-                        OPTIONS.contextSize ??
-                        16
-                    )
-                )
+            Number(
+                OPTIONS.contextSize ||
+                256
             ),
 
         embeddingSize:
-            Math.max(
-                32,
-                Number(
-                    OPTIONS.embeddingSize ??
-                    32
-                )
+            Number(
+                OPTIONS.embeddingSize ||
+                128
             ),
 
         layers:
-            Math.max(
-                1,
-                Math.min(
-                    4,
-                    Number(
-                        OPTIONS.layers ??
-                        1
-                    )
-                )
+            Number(
+                OPTIONS.layers ||
+                4
             ),
 
         heads:
-            Math.max(
-                1,
-                Math.min(
-                    4,
-                    Number(
-                        OPTIONS.heads ??
-                        1
-                    )
-                )
+            Number(
+                OPTIONS.heads ||
+                4
             ),
 
         headSize:
-            Math.max(
-                8,
-                Math.min(
-                    64,
-                    Number(
-                        OPTIONS.headSize ??
-                        32
-                    )
-                )
+            Number(
+                OPTIONS.headSize ||
+                32
             ),
 
         feedForwardSize:
-            Math.max(
-                32,
-                Math.min(
-                    256,
-                    Number(
-                        OPTIONS.feedForwardSize ??
-                        64
-                    )
-                )
+            Number(
+                OPTIONS.feedForwardSize ||
+                512
             ),
 
-        dropout:
-            0,
+        maxNgramOrder:
+            8,
 
-        rmsEpsilon:
-            0.00001,
+        maxNgramEntries:
+            100000,
 
         learningRate:
             Number(
-                OPTIONS.learningRate ??
-                0.0003
+                OPTIONS.learningRate ||
+                0.00025
             ),
 
-        beta1:
-            0.9,
-
-        beta2:
-            0.95,
-
-        weightDecay:
-            0.01,
-
-        gradientClip:
-            1.0,
+        minLearningRate:
+            0.00002,
 
         temperature:
-            0.8,
+            0.75,
 
         topK:
-            20,
+            40,
 
         topP:
-            0.9,
+            0.92,
 
         repetitionPenalty:
-            1.08
+            1.08,
+
+        seed:
+            1337
     };
 
 
     /*
-     * Sicherheit:
-     * embeddingSize muss heads * headSize sein.
-     */
-
-    config.embeddingSize =
-        config.heads *
-        config.headSize;
-
+      Wichtig:
+      Model.js selbst sorgt dafür,
+      dass embeddingSize = heads * headSize ist.
+    */
 
     const model =
         new Model(
@@ -1051,46 +1128,136 @@ function createModel(
 
 
     return {
-
         model,
-
         config
-
     };
-
 }
 
 
 /* =========================================================
-   TRAININGSFORMAT
-   ========================================================= */
+   ALTES MODELL LADEN
+========================================================= */
+
+function loadExistingModel(
+    model
+) {
+
+    if (
+        !fs.existsSync(
+            MODEL_FILE
+        )
+    ) {
+
+        return false;
+    }
+
+
+    try {
+
+        const saved =
+            readJSON(
+                MODEL_FILE
+            );
+
+
+        /*
+          Nur kompatible Modelle laden.
+
+          Alte Versionen werden absichtlich
+          nicht blind in das neue Modell geladen.
+        */
+
+        const savedConfig =
+            saved?.config;
+
+
+        const compatible =
+            saved?.version >= 5 &&
+            savedConfig &&
+            Number(
+                savedConfig.vocabSize
+            ) ===
+                Number(
+                    model.config.vocabSize
+                ) &&
+            Number(
+                savedConfig.contextSize
+            ) ===
+                Number(
+                    model.config.contextSize
+                ) &&
+            Number(
+                savedConfig.layers
+            ) ===
+                Number(
+                    model.config.layers
+                );
+
+
+        if (
+            !compatible
+        ) {
+
+            console.log(
+                "[MODEL] Altes inkompatibles Modell wird nicht übernommen."
+            );
+
+            return false;
+        }
+
+
+        if (
+            typeof model.load ===
+            "function"
+        ) {
+
+            model.load(
+                saved
+            );
+
+            console.log(
+                "[MODEL] Vorhandenes kompatibles Modell geladen."
+            );
+
+            return true;
+        }
+
+
+    } catch (error) {
+
+        console.warn(
+            "[MODEL] Laden fehlgeschlagen:",
+            error.message
+        );
+    }
+
+
+    return false;
+}
+
+
+/* =========================================================
+   TRAININGSTEXT
+========================================================= */
 
 function formatExample(
     example
 ) {
 
     return (
-
         "<|user|>\n" +
-
         example.question +
-
         "\n<|end|>\n" +
-
         "<|assistant|>\n" +
-
         example.answer +
-
         "\n<|end|>"
-
     );
-
 }
 
 
 /* =========================================================
-   TRAININGSSEQUENZEN
-   ========================================================= */
+   SEQUENZEN ERSTELLEN
+========================================================= */
 
 function createSequences(
     tokenizer,
@@ -1098,11 +1265,13 @@ function createSequences(
     sequenceLength
 ) {
 
-    const sequences = [];
+    const sequences =
+        [];
 
 
     for (
-        const example of examples
+        const example of
+        examples
     ) {
 
         if (stopRequested) {
@@ -1116,12 +1285,12 @@ function createSequences(
             );
 
 
-        let tokens;
+        let encoded;
 
 
         try {
 
-            tokens =
+            encoded =
                 tokenizer.encode(
                     text
                 );
@@ -1129,74 +1298,79 @@ function createSequences(
         } catch (error) {
 
             console.warn(
-                "Encode-Fehler:",
+                "[ENCODE]",
                 error.message
             );
 
             continue;
-
         }
 
 
-        if (
-            !Array.isArray(
-                tokens
-            )
-        ) {
-
+        if (!encoded) {
             continue;
-
         }
 
 
-        const list =
+        const tokens =
             Array.from(
-                tokens
-            );
+                encoded
+            )
+                .map(Number)
+                .filter(
+                    id =>
+                        Number.isInteger(
+                            id
+                        )
+                );
 
 
         if (
-            list.length < 2
+            tokens.length < 2
         ) {
-
             continue;
-
         }
 
 
         /*
-         * Kurze Sequenz.
-         */
+          Kurze Beispiele:
+          direkt verwenden.
+        */
 
         if (
-            list.length <=
+            tokens.length <=
             sequenceLength
         ) {
 
             sequences.push(
-                list
+                tokens
             );
 
             continue;
-
         }
 
 
         /*
-         * Lange Sequenz aufteilen.
-         */
+          Lange Beispiele:
+          über mehrere Fenster verteilen.
+        */
 
         for (
             let start = 0;
-            start < list.length;
-            start += sequenceLength
+            start <
+                tokens.length;
+            start +=
+                Math.max(
+                    1,
+                    sequenceLength -
+                        32
+                )
         ) {
 
             const part =
-                list.slice(
+                tokens.slice(
                     start,
                     start +
-                    sequenceLength
+                        sequenceLength
                 );
 
 
@@ -1207,22 +1381,18 @@ function createSequences(
                 sequences.push(
                     part
                 );
-
             }
-
         }
-
     }
 
 
     return sequences;
-
 }
 
 
 /* =========================================================
    MODELL SPEICHERN
-   ========================================================= */
+========================================================= */
 
 function serializeModel(
     model
@@ -1234,7 +1404,6 @@ function serializeModel(
     ) {
 
         return model.toJSON();
-
     }
 
 
@@ -1244,7 +1413,6 @@ function serializeModel(
     ) {
 
         return model.serialize();
-
     }
 
 
@@ -1254,14 +1422,12 @@ function serializeModel(
     ) {
 
         return model.export();
-
     }
 
 
     throw new Error(
         "Modell besitzt keine Exportfunktion."
     );
-
 }
 
 
@@ -1275,7 +1441,8 @@ function saveEverything(
     fs.mkdirSync(
         GELERNT,
         {
-            recursive: true
+            recursive:
+                true
         }
     );
 
@@ -1300,43 +1467,39 @@ function saveEverything(
             version:
                 2,
 
-            name:
-                "LUMORA",
-
             updatedAt:
-                new Date().toISOString(),
+                new Date()
+                    .toISOString(),
 
             model:
                 config,
 
-            training: {
-
-                epochs:
-                    Math.max(
-                        1,
+            training:
+                {
+                    epochs:
                         Number(
-                            OPTIONS.epochs ??
-                            1
-                        )
-                    ),
+                            OPTIONS.epochs ||
+                            10
+                        ),
 
-                sequenceLength:
-                    Math.max(
-                        2,
+                    sequenceLength:
                         Number(
-                            OPTIONS.sequenceLength ??
-                            16
+                            OPTIONS.sequenceLength ||
+                            256
+                        ),
+
+                    learningRate:
+                        Number(
+                            OPTIONS.learningRate ||
+                            0.00025
+                        ),
+
+                    contextSize:
+                        Number(
+                            OPTIONS.contextSize ||
+                            256
                         )
-                    ),
-
-                learningRate:
-                    Number(
-                        OPTIONS.learningRate ??
-                        0.0003
-                    )
-
-            }
-
+                }
         }
     );
 
@@ -1363,22 +1526,26 @@ function saveEverything(
             sequences:
                 state.sequences,
 
-            updatedAt:
-                new Date().toISOString()
+            files:
+                state.files,
 
+            updatedAt:
+                new Date()
+                    .toISOString()
         }
     );
-
 }
 
 
 /* =========================================================
    TRAINING
-   ========================================================= */
+========================================================= */
 
 async function train(
     model,
+    tokenizer,
     sequences,
+    dataset,
     config
 ) {
 
@@ -1386,15 +1553,133 @@ async function train(
         Math.max(
             1,
             Number(
-                OPTIONS.epochs ??
-                1
+                OPTIONS.epochs ||
+                10
             )
         );
 
 
     let step = 0;
+
     let loss = null;
 
+    let bestLoss =
+        Infinity;
+
+
+    /*
+      Vor dem eigentlichen neuronalen Training
+      werden die kompletten Sequenzen in die
+      Memory-Komponente des neuen Modells geladen.
+    */
+
+    send(
+        "progress",
+        {
+            phase:
+                "memory",
+
+            progress:
+                0,
+
+            message:
+                "Trainingswissen wird in die Modell-Memory geladen..."
+        }
+    );
+
+
+    for (
+        let i = 0;
+        i <
+            sequences.length;
+        i++
+    ) {
+
+        if (stopRequested) {
+            break;
+        }
+
+
+        const sequence =
+            sequences[i];
+
+
+        if (
+            typeof model.rememberSequence ===
+            "function"
+        ) {
+
+            model.rememberSequence(
+                sequence
+            );
+        }
+
+
+        if (
+            i % 25 ===
+            0
+        ) {
+
+            const progress =
+                Math.round(
+                    (
+                        (
+                            i + 1
+                        ) /
+                        sequences.length
+                    ) *
+                    100
+                );
+
+
+            send(
+                "progress",
+                {
+                    phase:
+                        "memory",
+
+                    progress,
+
+                    examples:
+                        dataset.examples.length,
+
+                    sequences:
+                        sequences.length,
+
+                    message:
+                        "Trainingswissen wird übernommen..."
+                }
+            );
+
+
+            await new Promise(
+                resolve =>
+                    setImmediate(
+                        resolve
+                    )
+            );
+        }
+    }
+
+
+    send(
+        "progress",
+        {
+            phase:
+                "memory",
+
+            progress:
+                100,
+
+            message:
+                "Trainingswissen übernommen."
+        }
+    );
+
+
+    /*
+      EIGENTLICHES TRAINING
+    */
 
     for (
         let epoch = 1;
@@ -1407,9 +1692,17 @@ async function train(
         }
 
 
+        let epochLoss =
+            0;
+
+        let epochTokens =
+            0;
+
+
         for (
             let index = 0;
-            index < sequences.length;
+            index <
+                sequences.length;
             index++
         ) {
 
@@ -1423,88 +1716,86 @@ async function train(
 
 
             if (
+                !Array.isArray(
+                    sequence
+                ) ||
                 sequence.length < 2
             ) {
 
                 continue;
-
             }
+
+
+            let result;
 
 
             try {
 
-                let result;
-
-
                 /*
-                 * Das aktuelle model.js
-                 * verwendet trainStep(tokens).
-                 *
-                 * Deshalb wird die komplette
-                 * Sequenz übergeben.
-                 */
+                  Wichtig:
+                  Das komplette Sequence-Array wird übergeben.
 
-                if (
-                    typeof model.trainStep ===
-                    "function"
-                ) {
+                  Die neue model.js erzeugt daraus
+                  selbst die nächsten Token.
+                */
 
-                    result =
-                        model.trainStep(
-                            sequence
-                        );
-
-                }
-
-                else if (
-                    typeof model.trainBackprop ===
-                    "function"
-                ) {
-
-                    result =
-                        model.trainBackprop(
-                            sequence
-                        );
-
-                }
-
-                else {
-
-                    throw new Error(
-                        "trainStep/trainBackprop fehlt."
+                result =
+                    model.trainStep(
+                        sequence
                     );
 
-                }
-
-
-                if (
-                    typeof result ===
-                    "number"
-                ) {
-
-                    loss =
-                        result;
-
-                }
-
-                else if (
-                    result &&
-                    typeof result.loss ===
-                    "number"
-                ) {
-
-                    loss =
-                        result.loss;
-
-                }
 
             } catch (error) {
 
-                console.warn(
-                    "Trainingsschritt fehlgeschlagen:",
+                console.error(
+                    "[TRAIN]",
                     error.message
                 );
 
+
+                send(
+                    "warning",
+                    {
+                        message:
+                            "Trainingsschritt fehlgeschlagen: " +
+                            error.message
+                    }
+                );
+
+
+                continue;
+            }
+
+
+            if (
+                typeof result ===
+                "number"
+            ) {
+
+                loss =
+                    result;
+
+            } else if (
+                result &&
+                typeof result.loss ===
+                    "number"
+            ) {
+
+                loss =
+                    result.loss;
+            }
+
+
+            if (
+                Number.isFinite(
+                    loss
+                )
+            ) {
+
+                epochLoss +=
+                    loss;
+
+                epochTokens++;
             }
 
 
@@ -1513,32 +1804,19 @@ async function train(
 
             const progress =
                 Math.round(
-
                     (
-
                         (
                             epoch - 1
                         ) /
-
-                        epochs
-
-                    )
-
-                    +
-
-                    (
-
+                        epochs +
                         (
                             index + 1
                         ) /
-
                         sequences.length /
-
                         epochs
-
-                    )
-
-                ) * 100;
+                    ) *
+                    100
+                );
 
 
             send(
@@ -1563,19 +1841,26 @@ async function train(
 
                     loss,
 
+                    examples:
+                        dataset.examples.length,
+
+                    sequences:
+                        sequences.length,
+
                     message:
                         "Training: Epoche " +
                         epoch +
                         "/" +
                         epochs
-
                 }
             );
 
 
             /*
-             * Render etwas Luft geben.
-             */
+              Event Loop freigeben,
+              damit Render den Worker nicht
+              als komplett blockiert behandelt.
+            */
 
             if (
                 step % 5 ===
@@ -1588,28 +1873,57 @@ async function train(
                             resolve
                         )
                 );
-
             }
-
         }
 
 
-        /*
-         * Zwischenstand speichern.
-         */
+        const averageLoss =
+            epochTokens > 0
+                ? epochLoss /
+                    epochTokens
+                : loss;
+
+
+        loss =
+            Number.isFinite(
+                averageLoss
+            )
+                ? averageLoss
+                : loss;
+
+
+        if (
+            Number.isFinite(
+                loss
+            ) &&
+            loss <
+                bestLoss
+        ) {
+
+            bestLoss =
+                loss;
+        }
+
 
         saveEverything(
             model,
-            nullSafeTokenizer,
+            tokenizer,
             config,
             {
                 epoch,
+
                 step,
+
                 loss,
+
                 examples:
-                    0,
+                    dataset.examples.length,
+
                 sequences:
-                    sequences.length
+                    sequences.length,
+
+                files:
+                    dataset.files.length
             }
         );
 
@@ -1624,12 +1938,18 @@ async function train(
 
                 loss,
 
-                totalEpochs:
-                    epochs
+                bestLoss,
 
+                totalEpochs:
+                    epochs,
+
+                examples:
+                    dataset.examples.length,
+
+                sequences:
+                    sequences.length
             }
         );
-
     }
 
 
@@ -1640,31 +1960,24 @@ async function train(
                 ? Math.max(
                     0,
                     Math.min(
-                        epochs,
-                        epochs - 1
+                        epochs - 1,
+                        epochs
                     )
                 )
                 : epochs,
 
         step,
 
-        loss
+        loss,
 
+        bestLoss
     };
-
 }
-
-
-/*
- * Wird nur verwendet, damit der Zwischenstand
- * nicht mit einem undefined-Tokenizer abstürzt.
- */
-let nullSafeTokenizer = null;
 
 
 /* =========================================================
    START
-   ========================================================= */
+========================================================= */
 
 async function main() {
 
@@ -1673,10 +1986,15 @@ async function main() {
         fs.mkdirSync(
             GELERNT,
             {
-                recursive: true
+                recursive:
+                    true
             }
         );
 
+
+        /*
+          STATUS
+        */
 
         send(
             "started",
@@ -1685,12 +2003,18 @@ async function main() {
                 phase:
                     "daten",
 
-                message:
-                    "Trainingsdaten werden geladen..."
+                progress:
+                    0,
 
+                message:
+                    "Trainingsdaten werden aus DATEN geladen..."
             }
         );
 
+
+        /*
+          DATEN
+        */
 
         const dataset =
             loadTrainingExamples();
@@ -1702,9 +2026,10 @@ async function main() {
         ) {
 
             throw new Error(
-                "Keine Trainingsdaten gefunden."
+                "Keine gültigen Trainingsdaten gefunden. " +
+                "Lege mindestens eine JSON-Datei mit " +
+                "frage/antwort bzw. question/answer in DATEN/ ab."
             );
-
         }
 
 
@@ -1718,18 +2043,23 @@ async function main() {
                 progress:
                     5,
 
+                files:
+                    dataset.files.length,
+
+                validFiles:
+                    dataset.validFiles.length,
+
+                failedFiles:
+                    dataset.failedFiles.length,
+
                 examples:
                     dataset.examples.length,
-
-                files:
-                    dataset.files,
 
                 message:
                     dataset.examples.length +
                     " Trainingsbeispiele aus " +
                     dataset.files.length +
-                    " JSON-Datei(en) gefunden."
-
+                    " JSON-Dateien gefunden."
             }
         );
 
@@ -1745,26 +2075,22 @@ async function main() {
             );
 
             return;
-
         }
 
 
-        /* =================================================
-           TOKENIZER
-           ================================================= */
+        /*
+          TOKENIZER
+        */
 
-        const tokenizer =
+        let tokenizer =
             loadTokenizer();
 
 
-        nullSafeTokenizer =
-            tokenizer;
-
-
-        await trainTokenizerSafe(
-            tokenizer,
-            dataset.examples
-        );
+        tokenizer =
+            await prepareTokenizer(
+                tokenizer,
+                dataset.examples
+            );
 
 
         exportTokenizer(
@@ -1783,44 +2109,12 @@ async function main() {
             );
 
             return;
-
         }
 
 
-        /* =================================================
-           VOKABULARUM
-           ================================================= */
-
-        const vocabSize =
-            getTokenizerVocabSize(
-                tokenizer
-            );
-
-
-        send(
-            "progress",
-            {
-
-                phase:
-                    "tokenizer",
-
-                progress:
-                    100,
-
-                vocabSize,
-
-                message:
-                    "Tokenizer bereit: " +
-                    vocabSize +
-                    " Token."
-
-            }
-        );
-
-
-        /* =================================================
-           SEQUENZEN
-           ================================================= */
+        /*
+          SEQUENZEN
+        */
 
         send(
             "progress",
@@ -1833,18 +2127,17 @@ async function main() {
                     0,
 
                 message:
-                    "Trainingssequenzen werden erstellt..."
-
+                    "Trainingssequenzen werden erzeugt..."
             }
         );
 
 
         const sequenceLength =
             Math.max(
-                2,
+                16,
                 Number(
-                    OPTIONS.sequenceLength ??
-                    16
+                    OPTIONS.sequenceLength ||
+                    256
                 )
             );
 
@@ -1863,9 +2156,8 @@ async function main() {
         ) {
 
             throw new Error(
-                "Keine Trainingssequenzen erzeugt."
+                "Keine Trainingssequenzen konnten erstellt werden."
             );
-
         }
 
 
@@ -1885,14 +2177,27 @@ async function main() {
                 message:
                     sequences.length +
                     " Trainingssequenzen erstellt."
-
             }
         );
 
 
-        /* =================================================
-           MODELL
-           ================================================= */
+        /*
+          MODELL
+        */
+
+        if (stopRequested) {
+
+            send(
+                "stopped",
+                {
+                    message:
+                        "Training gestoppt."
+                }
+            );
+
+            return;
+        }
+
 
         send(
             "progress",
@@ -1905,8 +2210,7 @@ async function main() {
                     0,
 
                 message:
-                    "LUMORA-Modell wird erstellt..."
-
+                    "LUMORA LARGE wird erstellt..."
             }
         );
 
@@ -1920,6 +2224,12 @@ async function main() {
             );
 
 
+        const loadedExisting =
+            loadExistingModel(
+                model
+            );
+
+
         send(
             "progress",
             {
@@ -1930,19 +2240,27 @@ async function main() {
                 progress:
                     100,
 
-                vocabSize:
-                    config.vocabSize,
+                loadedExisting,
+
+                parameters:
+                    typeof model.parameterCount ===
+                    "function"
+                        ? model.parameterCount()
+                        : null,
+
+                config,
 
                 message:
-                    "LUMORA-Modell bereit."
-
+                    loadedExisting
+                        ? "Vorhandenes kompatibles LUMORA-Modell geladen."
+                        : "Neues LUMORA LARGE-Modell bereit."
             }
         );
 
 
-        /* =================================================
-           TRAINING
-           ================================================= */
+        /*
+          TRAINING
+        */
 
         send(
             "progress",
@@ -1960,9 +2278,20 @@ async function main() {
                 step:
                     0,
 
-                message:
-                    "LUMORA-Training gestartet..."
+                totalEpochs:
+                    Number(
+                        OPTIONS.epochs ||
+                        10
+                    ),
 
+                examples:
+                    dataset.examples.length,
+
+                sequences:
+                    sequences.length,
+
+                message:
+                    "Training gestartet."
             }
         );
 
@@ -1970,14 +2299,16 @@ async function main() {
         const result =
             await train(
                 model,
+                tokenizer,
                 sequences,
+                dataset,
                 config
             );
 
 
-        /* =================================================
-           FINAL SPEICHERN
-           ================================================= */
+        /*
+          FINAL SPEICHERN
+        */
 
         saveEverything(
             model,
@@ -1998,11 +2329,17 @@ async function main() {
                     dataset.examples.length,
 
                 sequences:
-                    sequences.length
+                    sequences.length,
 
+                files:
+                    dataset.files.length
             }
         );
 
+
+        /*
+          FERTIG
+        */
 
         if (stopRequested) {
 
@@ -2019,15 +2356,18 @@ async function main() {
                     loss:
                         result.loss,
 
-                    message:
-                        "Training gestoppt. LUMORA wurde gespeichert."
+                    examples:
+                        dataset.examples.length,
 
+                    sequences:
+                        sequences.length,
+
+                    message:
+                        "Training gestoppt. Der aktuelle Stand wurde gespeichert."
                 }
             );
 
-        }
-
-        else {
+        } else {
 
             send(
                 "finished",
@@ -2042,11 +2382,11 @@ async function main() {
                     loss:
                         result.loss,
 
+                    bestLoss:
+                        result.bestLoss,
+
                     progress:
                         100,
-
-                    vocabSize:
-                        config.vocabSize,
 
                     examples:
                         dataset.examples.length,
@@ -2054,19 +2394,31 @@ async function main() {
                     sequences:
                         sequences.length,
 
-                    message:
-                        "LUMORA vollständig trainiert und gespeichert."
+                    files:
+                        dataset.files.length,
 
+                    message:
+                        "LUMORA LARGE wurde erfolgreich trainiert und gespeichert."
                 }
             );
-
         }
 
     } catch (error) {
 
         console.error(
-            "LUMORA TRAIN-WORKER ERROR:",
+            "======================================"
+        );
+
+        console.error(
+            "LUMORA TRAINING FEHLER"
+        );
+
+        console.error(
             error
+        );
+
+        console.error(
+            "======================================"
         );
 
 
@@ -2075,16 +2427,16 @@ async function main() {
             {
 
                 error:
-                    error.message,
+                    error.message ||
+                    String(error),
 
                 stack:
-                    error.stack
+                    error.stack ||
 
+                    null
             }
         );
-
     }
-
 }
 
 
