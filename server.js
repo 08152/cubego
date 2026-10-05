@@ -8,83 +8,372 @@ const { Worker } = require("worker_threads");
 
 const ROOT = __dirname;
 
-const DATA_DIR = path.join(ROOT, "DATEN");
-const LEARNED_DIR = path.join(ROOT, "GELERNT");
+const DATA_DIR =
+    path.join(
+        ROOT,
+        "DATEN"
+    );
 
-const MODEL_FILE = path.join(LEARNED_DIR, "model.json");
-const TOKENIZER_FILE = path.join(LEARNED_DIR, "tokenizer.json");
-const CONFIG_FILE = path.join(LEARNED_DIR, "config.json");
-const STATE_FILE = path.join(LEARNED_DIR, "training-state.json");
+const LEARNED_DIR =
+    path.join(
+        ROOT,
+        "GELERNT"
+    );
 
-const PORT = Number(process.env.PORT || 10000);
+const MODEL_FILE =
+    path.join(
+        LEARNED_DIR,
+        "model.json"
+    );
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
-const GITHUB_OWNER = process.env.GITHUB_OWNER || "08152";
-const GITHUB_REPO = process.env.GITHUB_REPO || "cubego";
-const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
+const TOKENIZER_FILE =
+    path.join(
+        LEARNED_DIR,
+        "tokenizer.json"
+    );
 
-const TRAIN_WORKER = path.join(
-    ROOT,
-    "train-worker.js"
+const CONFIG_FILE =
+    path.join(
+        LEARNED_DIR,
+        "config.json"
+    );
+
+const STATE_FILE =
+    path.join(
+        LEARNED_DIR,
+        "training-state.json"
+    );
+
+const PORT =
+    Number(
+        process.env.PORT ||
+        10000
+    );
+
+const GITHUB_TOKEN =
+    process.env.GITHUB_TOKEN ||
+    "";
+
+const GITHUB_OWNER =
+    process.env.GITHUB_OWNER ||
+    "08152";
+
+const GITHUB_REPO =
+    process.env.GITHUB_REPO ||
+    "cubego";
+
+const GITHUB_BRANCH =
+    process.env.GITHUB_BRANCH ||
+    "main";
+
+const TRAIN_WORKER =
+    path.join(
+        ROOT,
+        "train-worker.js"
+    );
+
+const GENERATE_WORKER =
+    path.join(
+        ROOT,
+        "generate-worker.js"
+    );
+
+
+/* =========================================================
+   VERZEICHNISSE
+========================================================= */
+
+fs.mkdirSync(
+    DATA_DIR,
+    {
+        recursive: true
+    }
 );
 
-const GENERATE_WORKER = path.join(
-    ROOT,
-    "generate-worker.js"
+fs.mkdirSync(
+    LEARNED_DIR,
+    {
+        recursive: true
+    }
 );
 
-fs.mkdirSync(DATA_DIR, {
-    recursive: true
-});
 
-fs.mkdirSync(LEARNED_DIR, {
-    recursive: true
-});
+/* =========================================================
+   GLOBALER STATUS
+========================================================= */
 
 let trainingWorker = null;
+
 let generateWorker = null;
 
+let startupReady = false;
+
+let startupRestorePromise = null;
+
+
 let trainingState = {
-    running: false,
-    phase: "idle",
-    progress: 0,
-    epoch: 0,
-    step: 0,
-    loss: null,
-    totalEpochs: 0,
-    message: "Bereit.",
-    github: null
+    running:
+        false,
+
+    phase:
+        "idle",
+
+    progress:
+        0,
+
+    epoch:
+        0,
+
+    step:
+        0,
+
+    loss:
+        null,
+
+    totalEpochs:
+        0,
+
+    message:
+        "Bereit."
 };
 
+
 let generationState = {
-    running: false,
-    text: "",
-    error: null,
-    startedAt: null,
-    finishedAt: null
+    running:
+        false,
+
+    text:
+        "",
+
+    error:
+        null,
+
+    startedAt:
+        null,
+
+    finishedAt:
+        null
 };
 
 
 /* =========================================================
-   HILFSFUNKTIONEN
-   ========================================================= */
+   DATEI-HILFEN
+========================================================= */
 
-function json(res, status, data) {
-    let body;
-
+function fileExists(
+    file
+) {
     try {
-        body = JSON.stringify(
+        return fs.existsSync(
+            file
+        );
+    } catch {
+        return false;
+    }
+}
+
+
+function safeFileSize(
+    file
+) {
+    try {
+        return fs.statSync(
+            file
+        ).size;
+    } catch {
+        return 0;
+    }
+}
+
+
+function readJSON(
+    file,
+    fallback = null
+) {
+    try {
+        return JSON.parse(
+            fs.readFileSync(
+                file,
+                "utf8"
+            )
+        );
+    } catch {
+        return fallback;
+    }
+}
+
+
+function writeJSON(
+    file,
+    data
+) {
+    fs.mkdirSync(
+        path.dirname(
+            file
+        ),
+        {
+            recursive:
+                true
+        }
+    );
+
+    const temp =
+        file +
+        ".tmp";
+
+    fs.writeFileSync(
+        temp,
+        JSON.stringify(
+            data,
+            null,
+            2
+        ),
+        "utf8"
+    );
+
+    fs.renameSync(
+        temp,
+        file
+    );
+}
+
+
+/* =========================================================
+   HTTP BODY
+========================================================= */
+
+function readBody(
+    req
+) {
+
+    return new Promise(
+        (
+            resolve,
+            reject
+        ) => {
+
+            let body =
+                "";
+
+            let settled =
+                false;
+
+
+            function fail(
+                error
+            ) {
+
+                if (settled) {
+                    return;
+                }
+
+                settled =
+                    true;
+
+                reject(
+                    error
+                );
+            }
+
+
+            req.on(
+                "data",
+                chunk => {
+
+                    body += chunk;
+
+
+                    if (
+                        body.length >
+                        10 *
+                        1024 *
+                        1024
+                    ) {
+
+                        fail(
+                            new Error(
+                                "Request zu groß."
+                            )
+                        );
+
+                        try {
+                            req.destroy();
+                        } catch {}
+                    }
+                }
+            );
+
+
+            req.on(
+                "end",
+                () => {
+
+                    if (settled) {
+                        return;
+                    }
+
+                    settled =
+                        true;
+
+
+                    if (
+                        !body.trim()
+                    ) {
+
+                        resolve(
+                            {}
+                        );
+
+                        return;
+                    }
+
+
+                    try {
+
+                        resolve(
+                            JSON.parse(
+                                body
+                            )
+                        );
+
+                    } catch {
+
+                        reject(
+                            new Error(
+                                "Ungültiges JSON."
+                            )
+                        );
+                    }
+                }
+            );
+
+
+            req.on(
+                "error",
+                fail
+            );
+        }
+    );
+}
+
+
+/* =========================================================
+   HTTP RESPONSE
+========================================================= */
+
+function json(
+    res,
+    status,
+    data
+) {
+
+    const body =
+        JSON.stringify(
             data,
             null,
             2
         );
-    } catch (error) {
-        body = JSON.stringify({
-            success: false,
-            error: "Antwort konnte nicht als JSON erstellt werden.",
-            details: error.message
-        });
-    }
+
 
     res.writeHead(
         status,
@@ -106,10 +395,19 @@ function json(res, status, data) {
         }
     );
 
-    res.end(body);
+
+    res.end(
+        body
+    );
 }
 
-function text(res, status, value) {
+
+function text(
+    res,
+    status,
+    value
+) {
+
     res.writeHead(
         status,
         {
@@ -120,12 +418,24 @@ function text(res, status, value) {
                 "no-store",
 
             "Access-Control-Allow-Origin":
-                "*"
+                "*",
+
+            "Access-Control-Allow-Headers":
+                "Content-Type",
+
+            "Access-Control-Allow-Methods":
+                "GET,POST,OPTIONS"
         }
     );
 
-    res.end(String(value));
+
+    res.end(
+        String(
+            value
+        )
+    );
 }
+
 
 function sendError(
     res,
@@ -133,12 +443,17 @@ function sendError(
     message,
     error
 ) {
+
     json(
         res,
         status,
         {
-            success: false,
-            error: message,
+            success:
+                false,
+
+            error:
+                message,
+
             details:
                 error
                     ? error.message
@@ -147,150 +462,144 @@ function sendError(
     );
 }
 
-function readBody(req) {
-    return new Promise(
-        (resolve, reject) => {
-            let body = "";
-            let finished = false;
 
-            req.on(
-                "data",
-                chunk => {
-                    if (finished) {
-                        return;
-                    }
-
-                    body += chunk;
-
-                    if (
-                        body.length >
-                        10 * 1024 * 1024
-                    ) {
-                        finished = true;
-
-                        reject(
-                            new Error(
-                                "Request zu groß."
-                            )
-                        );
-
-                        try {
-                            req.destroy();
-                        } catch {}
-                    }
-                }
-            );
-
-            req.on(
-                "end",
-                () => {
-                    if (finished) {
-                        return;
-                    }
-
-                    finished = true;
-
-                    if (!body) {
-                        resolve({});
-                        return;
-                    }
-
-                    try {
-                        resolve(
-                            JSON.parse(body)
-                        );
-                    } catch (error) {
-                        reject(
-                            new Error(
-                                "Ungültiges JSON."
-                            )
-                        );
-                    }
-                }
-            );
-
-            req.on(
-                "error",
-                error => {
-                    if (finished) {
-                        return;
-                    }
-
-                    finished = true;
-                    reject(error);
-                }
-            );
-        }
-    );
-}
-
-function fileExists(file) {
-    try {
-        return fs.existsSync(file);
-    } catch {
-        return false;
-    }
-}
-
-function readJSON(
-    file,
-    fallback = null
-) {
-    try {
-        return JSON.parse(
-            fs.readFileSync(
-                file,
-                "utf8"
-            )
-        );
-    } catch {
-        return fallback;
-    }
-}
+/* =========================================================
+   DATEN
+========================================================= */
 
 function getDataFiles() {
-    if (!fileExists(DATA_DIR)) {
+
+    if (
+        !fileExists(
+            DATA_DIR
+        )
+    ) {
         return [];
     }
 
-    return fs.readdirSync(
-        DATA_DIR,
-        {
-            withFileTypes: true
-        }
-    )
-    .filter(entry => {
-        if (!entry.isFile()) {
-            return false;
+
+    const files =
+        [];
+
+
+    function walk(
+        directory,
+        relative = ""
+    ) {
+
+        let entries =
+            [];
+
+
+        try {
+
+            entries =
+                fs.readdirSync(
+                    directory,
+                    {
+                        withFileTypes:
+                            true
+                    }
+                );
+
+        } catch {
+
+            return;
         }
 
-        const name =
-            entry.name.toLowerCase();
 
-        return (
-            name.endsWith(".json") ||
-            name.endsWith(".jsonl") ||
-            name.endsWith(".txt")
-        );
-    })
-    .map(entry =>
-        entry.name
+        for (
+            const entry of
+            entries
+        ) {
+
+            const fullPath =
+                path.join(
+                    directory,
+                    entry.name
+                );
+
+
+            const relativePath =
+                path.join(
+                    relative,
+                    entry.name
+                );
+
+
+            if (
+                entry.isDirectory()
+            ) {
+
+                walk(
+                    fullPath,
+                    relativePath
+                );
+
+                continue;
+            }
+
+
+            if (
+                entry.isFile() &&
+                entry.name
+                    .toLowerCase()
+                    .endsWith(".json")
+            ) {
+
+                files.push(
+                    relativePath
+                );
+            }
+        }
+    }
+
+
+    walk(
+        DATA_DIR
+    );
+
+
+    return files.sort(
+        (
+            a,
+            b
+        ) =>
+            a.localeCompare(
+                b,
+                "de",
+                {
+                    numeric:
+                        true,
+
+                    sensitivity:
+                        "base"
+                }
+            )
     );
 }
 
 
 /* =========================================================
    GITHUB
-   ========================================================= */
+========================================================= */
 
-function githubRequest(
+function githubJSONRequest(
     method,
     apiPath,
     body = null
 ) {
+
     return new Promise(
-        (resolve, reject) => {
-            if (!GITHUB_TOKEN) {
+        (
+            resolve,
+            reject
+        ) => {
+
+            if (
+                !GITHUB_TOKEN
+            ) {
+
                 reject(
                     new Error(
                         "GITHUB_TOKEN fehlt."
@@ -300,80 +609,110 @@ function githubRequest(
                 return;
             }
 
+
             const payload =
                 body === null
                     ? null
-                    : JSON.stringify(body);
+                    : JSON.stringify(
+                          body
+                      );
 
-            const options = {
-                hostname:
-                    "api.github.com",
-
-                port:
-                    443,
-
-                path:
-                    apiPath,
-
-                method,
-
-                headers: {
-                    "User-Agent":
-                        "CubeGo",
-
-                    "Accept":
-                        "application/vnd.github+json",
-
-                    "Authorization":
-                        "Bearer " +
-                        GITHUB_TOKEN,
-
-                    "X-GitHub-Api-Version":
-                        "2022-11-28"
-                }
-            };
-
-            if (payload) {
-                options.headers[
-                    "Content-Type"
-                ] =
-                    "application/json";
-
-                options.headers[
-                    "Content-Length"
-                ] =
-                    Buffer.byteLength(
-                        payload
-                    );
-            }
 
             const request =
                 https.request(
-                    options,
+                    {
+                        hostname:
+                            "api.github.com",
+
+                        port:
+                            443,
+
+                        path:
+                            apiPath,
+
+                        method,
+
+                        headers: {
+                            "User-Agent":
+                                "LUMORA",
+
+                            "Accept":
+                                "application/vnd.github+json",
+
+                            "Authorization":
+                                "Bearer " +
+                                GITHUB_TOKEN,
+
+                            "X-GitHub-Api-Version":
+                                "2022-11-28",
+
+                            ...(payload
+                                ? {
+                                      "Content-Type":
+                                          "application/json",
+
+                                      "Content-Length":
+                                          Buffer.byteLength(
+                                              payload
+                                          )
+                                  }
+                                : {})
+                        },
+
+                        timeout:
+                            120000
+                    },
+
                     response => {
-                        let data = "";
+
+                        const chunks =
+                            [];
+
 
                         response.on(
                             "data",
                             chunk => {
-                                data += chunk;
+
+                                chunks.push(
+                                    Buffer.from(
+                                        chunk
+                                    )
+                                );
                             }
                         );
+
 
                         response.on(
                             "end",
                             () => {
+
+                                const buffer =
+                                    Buffer.concat(
+                                        chunks
+                                    );
+
+
+                                const raw =
+                                    buffer.toString(
+                                        "utf8"
+                                    );
+
+
                                 let parsed =
-                                    data;
+                                    {};
+
 
                                 try {
+
                                     parsed =
-                                        data
+                                        raw
                                             ? JSON.parse(
-                                                  data
+                                                  raw
                                               )
                                             : {};
+
                                 } catch {}
+
 
                                 if (
                                     response.statusCode >=
@@ -381,134 +720,86 @@ function githubRequest(
                                     response.statusCode <
                                         300
                                 ) {
+
                                     resolve(
                                         parsed
                                     );
-                                } else {
-                                    reject(
-                                        new Error(
-                                            "GitHub API " +
-                                            response.statusCode +
-                                            ": " +
-                                            (
-                                                parsed.message ||
-                                                data
-                                            )
-                                        )
-                                    );
+
+                                    return;
                                 }
+
+
+                                reject(
+                                    new Error(
+                                        "GitHub API " +
+                                        response.statusCode +
+                                        ": " +
+                                        (
+                                            parsed.message ||
+                                            raw ||
+                                            "Unbekannter Fehler"
+                                        )
+                                    )
+                                );
                             }
                         );
                     }
                 );
+
+
+            request.on(
+                "timeout",
+                () => {
+
+                    request.destroy(
+                        new Error(
+                            "GitHub-Anfrage Timeout."
+                        )
+                    );
+                }
+            );
+
 
             request.on(
                 "error",
                 reject
             );
 
+
             if (payload) {
+
                 request.write(
                     payload
                 );
             }
+
 
             request.end();
         }
     );
 }
 
-function githubContentsPath(
+
+function githubPath(
     filePath
 ) {
-    return (
-        "/repos/" +
-        encodeURIComponent(
-            GITHUB_OWNER
-        ) +
-        "/" +
-        encodeURIComponent(
-            GITHUB_REPO
-        ) +
-        "/contents/" +
-        filePath
-            .split("/")
-            .map(
-                encodeURIComponent
-            )
-            .join("/") +
-        "?ref=" +
-        encodeURIComponent(
-            GITHUB_BRANCH
+
+    return filePath
+        .split("/")
+        .map(
+            encodeURIComponent
         )
-    );
+        .join("/");
 }
 
-async function getGitHubFile(
+
+/* =========================================================
+   GITHUB DATEI-METADATEN
+========================================================= */
+
+async function getGitHubFileMeta(
     filePath
 ) {
-    return githubRequest(
-        "GET",
-        githubContentsPath(
-            filePath
-        )
-    );
-}
-
-async function downloadGitHubFile(
-    filePath
-) {
-    const result =
-        await getGitHubFile(
-            filePath
-        );
-
-    if (
-        !result ||
-        !result.content
-    ) {
-        throw new Error(
-            "GitHub-Datei enthält keinen Inhalt: " +
-            filePath
-        );
-    }
-
-    const clean =
-        result.content.replace(
-            /\s/g,
-            ""
-        );
-
-    return Buffer.from(
-        clean,
-        "base64"
-    );
-}
-
-async function uploadGitHubFile(
-    filePath,
-    buffer,
-    message
-) {
-    const encoded =
-        Buffer.from(
-            buffer
-        ).toString(
-            "base64"
-        );
-
-    let sha = null;
-
-    try {
-        const existing =
-            await getGitHubFile(
-                filePath
-            );
-
-        sha =
-            existing.sha ||
-            null;
-    } catch {}
 
     const api =
         "/repos/" +
@@ -520,30 +811,227 @@ async function uploadGitHubFile(
             GITHUB_REPO
         ) +
         "/contents/" +
-        filePath
-            .split("/")
-            .map(
-                encodeURIComponent
-            )
-            .join("/");
+        githubPath(
+            filePath
+        ) +
+        "?ref=" +
+        encodeURIComponent(
+            GITHUB_BRANCH
+        );
+
+
+    return githubJSONRequest(
+        "GET",
+        api
+    );
+}
+
+
+/* =========================================================
+   GITHUB GROSSE DATEI DOWNLOAD
+========================================================= */
+
+/*
+   WICHTIG:
+
+   Wir verwenden NICHT mehr:
+
+       metadata.content
+
+   von /contents.
+
+   Stattdessen:
+   1. SHA der Datei holen
+   2. Git Blob laden
+   3. Base64 decodieren
+
+   Dadurch funktioniert auch eine größere model.json.
+*/
+
+async function downloadGitHubFile(
+    filePath
+) {
+
+    const meta =
+        await getGitHubFileMeta(
+            filePath
+        );
+
+
+    if (
+        !meta ||
+        !meta.sha
+    ) {
+
+        throw new Error(
+            "GitHub-Datei besitzt keine SHA: " +
+            filePath
+        );
+    }
+
+
+    const api =
+        "/repos/" +
+        encodeURIComponent(
+            GITHUB_OWNER
+        ) +
+        "/" +
+        encodeURIComponent(
+            GITHUB_REPO
+        ) +
+        "/git/blobs/" +
+        encodeURIComponent(
+            meta.sha
+        );
+
+
+    const blob =
+        await githubJSONRequest(
+            "GET",
+            api
+        );
+
+
+    if (
+        !blob ||
+        blob.encoding !==
+            "base64" ||
+        typeof blob.content !==
+            "string"
+    ) {
+
+        throw new Error(
+            "GitHub-Blob enthält keinen Base64-Inhalt: " +
+            filePath
+        );
+    }
+
+
+    const cleanBase64 =
+        blob.content.replace(
+            /\n/g,
+            ""
+        );
+
+
+    const buffer =
+        Buffer.from(
+            cleanBase64,
+            "base64"
+        );
+
+
+    if (
+        !buffer.length
+    ) {
+
+        throw new Error(
+            "GitHub-Datei ist leer: " +
+            filePath
+        );
+    }
+
+
+    return {
+        buffer,
+        sha:
+            meta.sha,
+        size:
+            buffer.length
+    };
+}
+
+
+/* =========================================================
+   GITHUB UPLOAD
+========================================================= */
+
+async function uploadGitHubFile(
+    filePath,
+    buffer,
+    message
+) {
+
+    if (
+        !Buffer.isBuffer(
+            buffer
+        )
+    ) {
+
+        buffer =
+            Buffer.from(
+                buffer
+            );
+    }
+
+
+    if (
+        !buffer.length
+    ) {
+
+        throw new Error(
+            "Leere Datei kann nicht hochgeladen werden: " +
+            filePath
+        );
+    }
+
+
+    let sha =
+        null;
+
+
+    try {
+
+        const existing =
+            await getGitHubFileMeta(
+                filePath
+            );
+
+
+        sha =
+            existing.sha ||
+            null;
+
+    } catch {}
+
+
+    const api =
+        "/repos/" +
+        encodeURIComponent(
+            GITHUB_OWNER
+        ) +
+        "/" +
+        encodeURIComponent(
+            GITHUB_REPO
+        ) +
+        "/contents/" +
+        githubPath(
+            filePath
+        );
+
 
     const body = {
         message:
             message ||
-            "CubeGo: gelernte Dateien aktualisiert",
+            "LUMORA: Datei aktualisiert",
 
         content:
-            encoded,
+            buffer.toString(
+                "base64"
+            ),
 
         branch:
             GITHUB_BRANCH
     };
 
+
     if (sha) {
-        body.sha = sha;
+        body.sha =
+            sha;
     }
 
-    return githubRequest(
+
+    return githubJSONRequest(
         "PUT",
         api,
         body
@@ -552,22 +1040,44 @@ async function uploadGitHubFile(
 
 
 /* =========================================================
-   GITHUB -> RENDER
-   ========================================================= */
+   GITHUB WIEDERHERSTELLUNG
+========================================================= */
 
 async function restoreLearnedFromGitHub() {
-    if (!GITHUB_TOKEN) {
+
+    console.log(
+        "------------------------------------"
+    );
+
+    console.log(
+        "[GITHUB] Prüfe gespeicherte Dateien..."
+    );
+
+
+    if (
+        !GITHUB_TOKEN
+    ) {
+
         console.log(
-            "[GITHUB] Kein GITHUB_TOKEN. Wiederherstellung übersprungen."
+            "[GITHUB] Kein GITHUB_TOKEN vorhanden."
         );
 
+
         return {
-            success: false,
-            restored: [],
-            message:
-                "GITHUB_TOKEN fehlt."
+            success:
+                false,
+
+            restored:
+                [],
+
+            missing:
+                [],
+
+            failed:
+                []
         };
     }
+
 
     const files = [
         "model.json",
@@ -576,65 +1086,84 @@ async function restoreLearnedFromGitHub() {
         "training-state.json"
     ];
 
-    const restored = [];
-    const missing = [];
-    const failed = [];
 
-    console.log(
-        "[GITHUB] Prüfe gespeichertes Modell..."
-    );
+    const restored =
+        [];
+
+    const missing =
+        [];
+
+    const failed =
+        [];
+
 
     for (
-        const filename of files
+        const filename
+        of files
     ) {
-        const local =
+
+        const remotePath =
+            "GELERNT/" +
+            filename;
+
+
+        const localPath =
             path.join(
                 LEARNED_DIR,
                 filename
             );
 
+
         try {
-            const buffer =
+
+            const result =
                 await downloadGitHubFile(
-                    "GELERNT/" +
-                    filename
+                    remotePath
                 );
 
-            /*
-             * GitHub ist hier die dauerhafte Speicherung.
-             * Die Datei wird bei jedem Neustart aktualisiert,
-             * damit Render nicht mit einem alten/fehlenden
-             * lokalen Stand arbeitet.
-             */
 
             fs.writeFileSync(
-                local,
-                buffer
+                localPath,
+                result.buffer
             );
+
 
             restored.push(
                 filename
             );
 
+
             console.log(
                 "[GITHUB] Wiederhergestellt: " +
-                filename
+                filename +
+                " (" +
+                result.size +
+                " Bytes)"
             );
+
+
         } catch (error) {
+
             if (
                 String(
                     error.message
-                ).includes("404")
+                ).includes(
+                    "GitHub API 404"
+                )
             ) {
+
                 missing.push(
                     filename
                 );
+
 
                 console.log(
                     "[GITHUB] Nicht vorhanden: " +
                     filename
                 );
+
             } else {
+
                 failed.push({
                     file:
                         filename,
@@ -642,6 +1171,7 @@ async function restoreLearnedFromGitHub() {
                     error:
                         error.message
                 });
+
 
                 console.error(
                     "[GITHUB] Fehler bei " +
@@ -653,7 +1183,8 @@ async function restoreLearnedFromGitHub() {
         }
     }
 
-    return {
+
+    const result = {
         success:
             failed.length === 0,
 
@@ -663,22 +1194,43 @@ async function restoreLearnedFromGitHub() {
 
         failed
     };
+
+
+    console.log(
+        "[GITHUB] Wiederherstellung abgeschlossen:",
+        result
+    );
+
+
+    return result;
 }
 
 
 /* =========================================================
-   RENDER -> GITHUB
-   ========================================================= */
+   GELERNTE DATEIEN ZU GITHUB
+========================================================= */
 
 async function syncLearnedToGitHub() {
-    if (!GITHUB_TOKEN) {
+
+    if (
+        !GITHUB_TOKEN
+    ) {
+
         return {
-            success: false,
-            uploaded: [],
+            success:
+                false,
+
             message:
-                "GITHUB_TOKEN fehlt."
+                "GITHUB_TOKEN fehlt.",
+
+            uploaded:
+                [],
+
+            failed:
+                []
         };
     }
+
 
     const files = [
         "model.json",
@@ -687,50 +1239,85 @@ async function syncLearnedToGitHub() {
         "training-state.json"
     ];
 
-    const uploaded = [];
-    const failed = [];
+
+    const uploaded =
+        [];
+
+    const failed =
+        [];
+
 
     for (
-        const filename of files
+        const filename
+        of files
     ) {
+
         const local =
             path.join(
                 LEARNED_DIR,
                 filename
             );
 
+
         if (
-            !fileExists(local)
+            !fileExists(
+                local
+            )
         ) {
+
             continue;
         }
 
+
         try {
+
             const buffer =
                 fs.readFileSync(
                     local
                 );
 
+
+            if (
+                !buffer.length
+            ) {
+
+                throw new Error(
+                    "Lokale Datei ist leer: " +
+                    filename
+                );
+            }
+
+
             await uploadGitHubFile(
                 "GELERNT/" +
-                filename,
+                    filename,
 
                 buffer,
 
-                "CubeGo: " +
-                filename +
-                " aktualisiert"
+                "LUMORA: " +
+                    filename +
+                    " aktualisiert"
             );
 
-            uploaded.push(
-                filename
-            );
+
+            uploaded.push({
+                filename,
+                bytes:
+                    buffer.length
+            });
+
 
             console.log(
                 "[GITHUB] Hochgeladen: " +
-                filename
+                filename +
+                " (" +
+                buffer.length +
+                " Bytes)"
             );
+
+
         } catch (error) {
+
             failed.push({
                 file:
                     filename,
@@ -739,14 +1326,16 @@ async function syncLearnedToGitHub() {
                     error.message
             });
 
+
             console.error(
-                "[GITHUB] Upload-Fehler bei " +
+                "[GITHUB] Upload-Fehler " +
                 filename +
                 ": " +
                 error.message
             );
         }
     }
+
 
     return {
         success:
@@ -760,10 +1349,11 @@ async function syncLearnedToGitHub() {
 
 
 /* =========================================================
-   STATUS
-   ========================================================= */
+   MODEL STATUS
+========================================================= */
 
 function getModelStatus() {
+
     return {
         model:
             fileExists(
@@ -780,31 +1370,43 @@ function getModelStatus() {
                 CONFIG_FILE
             ),
 
-        state:
-            fileExists(
-                STATE_FILE
+        modelBytes:
+            safeFileSize(
+                MODEL_FILE
+            ),
+
+        tokenizerBytes:
+            safeFileSize(
+                TOKENIZER_FILE
             ),
 
         modelFile:
             MODEL_FILE,
 
         tokenizerFile:
-            TOKENIZER_FILE,
-
-        configFile:
-            CONFIG_FILE
+            TOKENIZER_FILE
     };
 }
 
+
+/* =========================================================
+   GESAMTSTATUS
+========================================================= */
+
 function getStatus() {
+
     return {
-        success: true,
+        success:
+            true,
 
         name:
-            "CubeGo",
+            "LUMORA",
 
         online:
             true,
+
+        ready:
+            startupReady,
 
         port:
             PORT,
@@ -826,6 +1428,7 @@ function getStatus() {
         },
 
         daten: {
+
             folder:
                 DATA_DIR,
 
@@ -833,7 +1436,8 @@ function getStatus() {
                 getDataFiles(),
 
             count:
-                getDataFiles().length
+                getDataFiles()
+                    .length
         },
 
         model:
@@ -849,183 +1453,129 @@ function getStatus() {
 
 
 /* =========================================================
-   TRAINING
-   ========================================================= */
+   TRAINING STARTEN
+========================================================= */
 
 function startTraining(
-    payload
+    payload = {}
 ) {
-    payload =
-        payload &&
-        typeof payload === "object"
-            ? payload
-            : {};
 
-    if (trainingWorker) {
+    if (
+        trainingWorker
+    ) {
+
         return {
-            success: false,
+            success:
+                false,
+
             message:
                 "Training läuft bereits."
         };
     }
+
 
     if (
         !fileExists(
             TRAIN_WORKER
         )
     ) {
+
         return {
-            success: false,
+            success:
+                false,
+
             message:
                 "train-worker.js wurde nicht gefunden."
         };
     }
 
-    /*
-     * KLEINES MODELL
-     *
-     * Diese Werte sind absichtlich deutlich
-     * kleiner als die vorherigen Defaults.
-     *
-     * Dadurch sollte das Training auf Render
-     * wesentlich schneller laufen.
-     */
 
     const options = {
+
         epochs:
-            Number(
-                payload.epochs ??
-                1
+            Math.max(
+                1,
+                Number(
+                    payload.epochs ||
+                    20
+                )
             ),
 
         sequenceLength:
-            Number(
-                payload.sequenceLength ??
-                16
+            Math.max(
+                16,
+                Number(
+                    payload.sequenceLength ||
+                    256
+                )
             ),
 
         learningRate:
             Number(
-                payload.learningRate ??
-                0.0003
+                payload.learningRate ||
+                0.00025
             ),
 
         contextSize:
-            Number(
-                payload.contextSize ??
-                16
+            Math.max(
+                16,
+                Number(
+                    payload.contextSize ||
+                    256
+                )
             ),
 
         embeddingSize:
-            Number(
-                payload.embeddingSize ??
-                32
+            Math.max(
+                32,
+                Number(
+                    payload.embeddingSize ||
+                    128
+                )
             ),
 
         layers:
-            Number(
-                payload.layers ??
-                1
+            Math.max(
+                1,
+                Number(
+                    payload.layers ||
+                    4
+                )
             ),
 
         heads:
-            Number(
-                payload.heads ??
-                1
+            Math.max(
+                1,
+                Number(
+                    payload.heads ||
+                    4
+                )
             ),
 
         headSize:
-            Number(
-                payload.headSize ??
-                32
+            Math.max(
+                8,
+                Number(
+                    payload.headSize ||
+                    32
+                )
             ),
 
         feedForwardSize:
-            Number(
-                payload.feedForwardSize ??
-                64
+            Math.max(
+                64,
+                Number(
+                    payload.feedForwardSize ||
+                    512
+                )
             )
     };
 
-    /*
-     * Sicherheitsgrenzen gegen versehentlich
-     * riesige Trainingsparameter.
-     */
-
-    options.epochs =
-        Math.max(
-            1,
-            Math.min(
-                options.epochs,
-                100
-            )
-        );
-
-    options.sequenceLength =
-        Math.max(
-            4,
-            Math.min(
-                options.sequenceLength,
-                512
-            )
-        );
-
-    options.contextSize =
-        Math.max(
-            4,
-            Math.min(
-                options.contextSize,
-                512
-            )
-        );
-
-    options.embeddingSize =
-        Math.max(
-            8,
-            Math.min(
-                options.embeddingSize,
-                1024
-            )
-        );
-
-    options.layers =
-        Math.max(
-            1,
-            Math.min(
-                options.layers,
-                24
-            )
-        );
-
-    options.heads =
-        Math.max(
-            1,
-            Math.min(
-                options.heads,
-                24
-            )
-        );
-
-    options.headSize =
-        Math.max(
-            8,
-            Math.min(
-                options.headSize,
-                256
-            )
-        );
-
-    options.feedForwardSize =
-        Math.max(
-            16,
-            Math.min(
-                options.feedForwardSize,
-                4096
-            )
-        );
 
     trainingState = {
-        running: true,
+
+        running:
+            true,
 
         phase:
             "starting",
@@ -1048,23 +1598,22 @@ function startTraining(
         message:
             "Training wird gestartet...",
 
-        options,
+        startedAt:
+            new Date()
+                .toISOString(),
 
-        github:
-            null
+        options
     };
 
-    console.log(
-        "[TRAIN] Starte Training mit:",
-        options
-    );
 
     try {
+
         trainingWorker =
             new Worker(
                 TRAIN_WORKER,
                 {
                     workerData: {
+
                         root:
                             ROOT,
 
@@ -1078,10 +1627,12 @@ function startTraining(
                     }
                 }
             );
+
+
     } catch (error) {
-        trainingWorker = null;
 
         trainingState = {
+
             ...trainingState,
 
             running:
@@ -1097,225 +1648,238 @@ function startTraining(
                 error.message
         };
 
+
+        trainingWorker =
+            null;
+
+
         return {
-            success: false,
+            success:
+                false,
+
             message:
-                "Training konnte nicht gestartet werden.",
-            error:
                 error.message
         };
     }
 
+
     trainingWorker.on(
         "message",
         async message => {
+
             if (!message) {
                 return;
             }
 
+
             if (
                 message.type ===
-                "started"
-            ) {
-                trainingState =
-                    Object.assign(
-                        {},
-                        trainingState,
-                        message,
-                        {
-                            running:
-                                true,
+                    "started" ||
 
-                            phase:
-                                "training"
-                        }
-                    );
+                message.type ===
+                    "progress" ||
+
+                message.type ===
+                    "epoch"
+            ) {
+
+                trainingState = {
+
+                    ...trainingState,
+
+                    ...message,
+
+                    running:
+                        true
+                };
+
+
+                if (
+                    message.type ===
+                    "epoch"
+                ) {
+
+                    trainingState.phase =
+                        "training";
+                }
+
 
                 return;
             }
 
+
             if (
                 message.type ===
-                "progress"
+                "warning"
             ) {
-                trainingState =
-                    Object.assign(
-                        {},
-                        trainingState,
-                        message,
-                        {
-                            running:
-                                true
-                        }
-                    );
+
+                trainingState.warning =
+                    message.message;
 
                 return;
             }
 
-            if (
-                message.type ===
-                "epoch"
-            ) {
-                trainingState =
-                    Object.assign(
-                        {},
-                        trainingState,
-                        message,
-                        {
-                            running:
-                                true,
-
-                            phase:
-                                "training"
-                        }
-                    );
-
-                return;
-            }
 
             if (
                 message.type ===
                 "finished"
             ) {
-                trainingState =
-                    Object.assign(
-                        {},
-                        trainingState,
-                        message,
-                        {
-                            running:
-                                false,
-
-                            phase:
-                                "finished",
-
-                            progress:
-                                100,
-
-                            message:
-                                "Training abgeschlossen."
-                        }
-                    );
 
                 const worker =
                     trainingWorker;
 
+
+                trainingState = {
+
+                    ...trainingState,
+
+                    ...message,
+
+                    running:
+                        false,
+
+                    phase:
+                        "finished",
+
+                    progress:
+                        100,
+
+                    message:
+                        message.message ||
+                        "Training abgeschlossen.",
+
+                    finishedAt:
+                        new Date()
+                            .toISOString()
+                };
+
+
                 trainingWorker =
                     null;
 
-                /*
-                 * Erst sicherstellen, dass die Dateien
-                 * vorhanden sind, danach zu GitHub sichern.
-                 */
 
                 try {
+
                     const github =
                         await syncLearnedToGitHub();
+
 
                     trainingState.github =
                         github;
 
-                    if (
-                        github.success
-                    ) {
-                        trainingState.message =
-                            "Training abgeschlossen und Modell zu GitHub gesichert.";
-                    } else {
-                        trainingState.message =
-                            "Training abgeschlossen, aber GitHub-Sicherung hatte Fehler.";
-                    }
                 } catch (error) {
+
                     trainingState.github = {
+
                         success:
                             false,
 
                         message:
                             error.message
                     };
-
-                    trainingState.message =
-                        "Training abgeschlossen, aber GitHub-Sicherung fehlgeschlagen.";
                 }
 
+
                 if (worker) {
+
                     try {
                         await worker.terminate();
                     } catch {}
                 }
 
+
                 return;
             }
+
 
             if (
                 message.type ===
                 "stopped"
             ) {
-                trainingState =
-                    Object.assign(
-                        {},
-                        trainingState,
-                        message,
-                        {
-                            running:
-                                false,
-
-                            phase:
-                                "stopped",
-
-                            message:
-                                "Training gestoppt."
-                        }
-                    );
 
                 const worker =
                     trainingWorker;
 
+
+                trainingState = {
+
+                    ...trainingState,
+
+                    ...message,
+
+                    running:
+                        false,
+
+                    phase:
+                        "stopped",
+
+                    message:
+                        message.message ||
+                        "Training gestoppt.",
+
+                    finishedAt:
+                        new Date()
+                            .toISOString()
+                };
+
+
                 trainingWorker =
                     null;
 
+
                 if (worker) {
+
                     try {
                         await worker.terminate();
                     } catch {}
                 }
 
+
                 return;
             }
+
 
             if (
                 message.type ===
                 "error"
             ) {
-                trainingState =
-                    Object.assign(
-                        {},
-                        trainingState,
-                        {
-                            running:
-                                false,
-
-                            phase:
-                                "error",
-
-                            message:
-                                message.error ||
-                                "Unbekannter Trainingsfehler.",
-
-                            error:
-                                message.error,
-
-                            stack:
-                                message.stack
-                        }
-                    );
 
                 const worker =
                     trainingWorker;
 
+
+                trainingState = {
+
+                    ...trainingState,
+
+                    running:
+                        false,
+
+                    phase:
+                        "error",
+
+                    message:
+                        message.error ||
+                        "Unbekannter Trainingsfehler.",
+
+                    error:
+                        message.error,
+
+                    stack:
+                        message.stack,
+
+                    finishedAt:
+                        new Date()
+                            .toISOString()
+                };
+
+
                 trainingWorker =
                     null;
 
+
                 if (worker) {
+
                     try {
                         await worker.terminate();
                     } catch {}
@@ -1324,15 +1888,19 @@ function startTraining(
         }
     );
 
+
     trainingWorker.on(
         "error",
         error => {
+
             console.error(
                 "[TRAIN WORKER ERROR]",
                 error
             );
 
+
             trainingState = {
+
                 ...trainingState,
 
                 running:
@@ -1345,27 +1913,37 @@ function startTraining(
                     error.message,
 
                 error:
-                    error.message
+                    error.message,
+
+                finishedAt:
+                    new Date()
+                        .toISOString()
             };
+
 
             trainingWorker =
                 null;
         }
     );
 
+
     trainingWorker.on(
         "exit",
         code => {
+
             console.log(
                 "[TRAIN WORKER EXIT]",
                 code
             );
 
+
             if (
                 code !== 0 &&
                 trainingState.running
             ) {
+
                 trainingState = {
+
                     ...trainingState,
 
                     running:
@@ -1376,14 +1954,24 @@ function startTraining(
 
                     message:
                         "Training-Worker beendet mit Code " +
-                        code
+                        code,
+
+                    error:
+                        "Worker exit " +
+                        code,
+
+                    finishedAt:
+                        new Date()
+                            .toISOString()
                 };
             }
+
 
             trainingWorker =
                 null;
         }
     );
+
 
     return {
         success:
@@ -1396,32 +1984,46 @@ function startTraining(
     };
 }
 
+
+/* =========================================================
+   TRAINING STOP
+========================================================= */
+
 async function stopTraining() {
-    if (!trainingWorker) {
+
+    if (
+        !trainingWorker
+    ) {
+
         return {
-            success: false,
+
+            success:
+                false,
+
             message:
                 "Kein Training läuft."
         };
     }
 
+
     trainingState.message =
         "Training wird gestoppt...";
 
+
     try {
-        trainingWorker.postMessage({
-            type:
-                "stop"
-        });
-    } catch (error) {
-        return {
-            success: false,
-            message:
-                error.message
-        };
-    }
+
+        trainingWorker.postMessage(
+            {
+                type:
+                    "stop"
+            }
+        );
+
+    } catch {}
+
 
     return {
+
         success:
             true,
 
@@ -1432,49 +2034,79 @@ async function stopTraining() {
 
 
 /* =========================================================
-   GENERIERUNG
-   ========================================================= */
+   GENERATION START
+========================================================= */
 
 function startGeneration(
-    payload
+    payload = {}
 ) {
-    payload =
-        payload &&
-        typeof payload === "object"
-            ? payload
-            : {};
 
-    if (generateWorker) {
+    if (
+        generateWorker
+    ) {
+
         return {
-            success: false,
+
+            success:
+                false,
+
             message:
                 "Generation läuft bereits."
         };
     }
+
+
+    if (
+        !startupReady
+    ) {
+
+        return {
+
+            success:
+                false,
+
+            message:
+                "LUMORA wird noch aus GitHub wiederhergestellt. Bitte danach erneut versuchen."
+        };
+    }
+
 
     if (
         !fileExists(
             GENERATE_WORKER
         )
     ) {
+
         return {
-            success: false,
+
+            success:
+                false,
+
             message:
                 "generate-worker.js wurde nicht gefunden."
         };
     }
 
+
     if (
         !fileExists(
             MODEL_FILE
+        ) ||
+        !fileExists(
+            TOKENIZER_FILE
         )
     ) {
+
         return {
-            success: false,
+
+            success:
+                false,
+
             message:
-                "Noch kein trainiertes Modell vorhanden."
+                "Modell oder Tokenizer fehlt. Trainiere LUMORA zuerst."
         };
     }
+
 
     const prompt =
         String(
@@ -1482,15 +2114,22 @@ function startGeneration(
             ""
         ).trim();
 
+
     if (!prompt) {
+
         return {
-            success: false,
+
+            success:
+                false,
+
             message:
                 "Kein Prompt angegeben."
         };
     }
 
+
     generationState = {
+
         running:
             true,
 
@@ -1501,18 +2140,23 @@ function startGeneration(
             null,
 
         startedAt:
-            new Date().toISOString(),
+            new Date()
+                .toISOString(),
 
         finishedAt:
             null
     };
 
+
     try {
+
         generateWorker =
             new Worker(
                 GENERATE_WORKER,
                 {
+
                     workerData: {
+
                         root:
                             ROOT,
 
@@ -1526,10 +2170,12 @@ function startGeneration(
                     }
                 }
             );
+
+
     } catch (error) {
-        generateWorker = null;
 
         generationState = {
+
             ...generationState,
 
             running:
@@ -1539,78 +2185,147 @@ function startGeneration(
                 error.message,
 
             finishedAt:
-                new Date().toISOString()
+                new Date()
+                    .toISOString()
         };
 
+
+        generateWorker =
+            null;
+
+
         return {
-            success: false,
+
+            success:
+                false,
+
             message:
-                "Generation konnte nicht gestartet werden.",
-            error:
                 error.message
         };
     }
 
+
     generateWorker.on(
         "message",
         message => {
+
             if (!message) {
                 return;
             }
+
 
             if (
                 message.type ===
                 "token"
             ) {
-                generationState.text +=
-                    String(
-                        message.token ||
-                        ""
-                    );
+
+                /*
+                  Wenn generate-worker bereits
+                  den kompletten aktuellen Text schickt,
+                  direkt übernehmen.
+
+                  Dadurch landen keine numerischen
+                  Token-IDs im Status-Text.
+                */
+
+                if (
+                    typeof message.text ===
+                    "string"
+                ) {
+
+                    generationState.text =
+                        message.text;
+
+                } else if (
+                    typeof message.token ===
+                    "string"
+                ) {
+
+                    generationState.text +=
+                        message.token;
+                }
+
 
                 return;
             }
+
+
+            if (
+                message.type ===
+                "status"
+            ) {
+
+                generationState.message =
+                    message.message;
+
+                return;
+            }
+
 
             if (
                 message.type ===
                 "complete"
             ) {
+
                 generationState = {
+
                     ...generationState,
 
                     running:
                         false,
 
                     text:
-                        message.text ||
-                        generationState.text,
+                        typeof message.text ===
+                        "string"
+
+                            ? message.text
+
+                            : generationState.text,
+
+                    answer:
+                        message.answer,
+
+                    tokens:
+                        message.tokens,
+
+                    promptTokens:
+                        message.promptTokens,
 
                     finishedAt:
-                        new Date().toISOString()
+                        new Date()
+                            .toISOString()
                 };
+
 
                 generateWorker =
                     null;
 
+
                 return;
             }
+
 
             if (
                 message.type ===
                 "error"
             ) {
+
                 generationState = {
+
                     ...generationState,
 
                     running:
                         false,
 
                     error:
-                        message.error,
+                        message.error ||
+                        "Unbekannter Generierungsfehler.",
 
                     finishedAt:
-                        new Date().toISOString()
+                        new Date()
+                            .toISOString()
                 };
+
 
                 generateWorker =
                     null;
@@ -1618,15 +2333,19 @@ function startGeneration(
         }
     );
 
+
     generateWorker.on(
         "error",
         error => {
+
             console.error(
                 "[GENERATE WORKER ERROR]",
                 error
             );
 
+
             generationState = {
+
                 ...generationState,
 
                 running:
@@ -1636,27 +2355,34 @@ function startGeneration(
                     error.message,
 
                 finishedAt:
-                    new Date().toISOString()
+                    new Date()
+                        .toISOString()
             };
+
 
             generateWorker =
                 null;
         }
     );
 
+
     generateWorker.on(
         "exit",
         code => {
+
             console.log(
                 "[GENERATE WORKER EXIT]",
                 code
             );
 
+
             if (
                 code !== 0 &&
                 generationState.running
             ) {
+
                 generationState = {
+
                     ...generationState,
 
                     running:
@@ -1667,16 +2393,20 @@ function startGeneration(
                         code,
 
                     finishedAt:
-                        new Date().toISOString()
+                        new Date()
+                            .toISOString()
                 };
             }
+
 
             generateWorker =
                 null;
         }
     );
 
+
     return {
+
         success:
             true,
 
@@ -1685,29 +2415,42 @@ function startGeneration(
     };
 }
 
+
+/* =========================================================
+   GENERATION STOP
+========================================================= */
+
 function stopGeneration() {
-    if (!generateWorker) {
+
+    if (
+        !generateWorker
+    ) {
+
         return {
-            success: false,
+
+            success:
+                false,
+
             message:
                 "Keine Generation läuft."
         };
     }
 
+
     try {
-        generateWorker.postMessage({
-            type:
-                "stop"
-        });
-    } catch (error) {
-        return {
-            success: false,
-            message:
-                error.message
-        };
-    }
+
+        generateWorker.postMessage(
+            {
+                type:
+                    "stop"
+            }
+        );
+
+    } catch {}
+
 
     return {
+
         success:
             true,
 
@@ -1719,19 +2462,30 @@ function stopGeneration() {
 
 /* =========================================================
    HTTP SERVER
-   ========================================================= */
+========================================================= */
 
 const server =
     http.createServer(
-        async (req, res) => {
+        async (
+            req,
+            res
+        ) => {
+
             try {
+
+                /* -------------------------
+                   CORS
+                ------------------------- */
+
                 if (
                     req.method ===
                     "OPTIONS"
                 ) {
+
                     res.writeHead(
                         204,
                         {
+
                             "Access-Control-Allow-Origin":
                                 "*",
 
@@ -1743,10 +2497,12 @@ const server =
                         }
                     );
 
+
                     res.end();
 
                     return;
                 }
+
 
                 const url =
                     new URL(
@@ -1758,18 +2514,22 @@ const server =
                         )
                     );
 
+
                 const pathname =
                     url.pathname;
 
 
-                /* =================================================
-                   GET API
-                   ================================================= */
+                /* =====================================================
+                   STATUS
+                ===================================================== */
 
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/status"
+                        "/api/status"
                 ) {
+
                     json(
                         res,
                         200,
@@ -1779,14 +2539,23 @@ const server =
                     return;
                 }
 
+
+                /* =====================================================
+                   DATEIEN
+                ===================================================== */
+
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/files"
+                        "/api/files"
                 ) {
+
                     json(
                         res,
                         200,
                         {
+
                             success:
                                 true,
 
@@ -1804,47 +2573,67 @@ const server =
                     return;
                 }
 
+
+                /* =====================================================
+                   DATENINFO
+                ===================================================== */
+
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/data"
+                        "/api/data"
                 ) {
+
                     const files =
                         getDataFiles();
 
+
                     const result =
                         [];
+
 
                     for (
                         const filename
                         of files
                     ) {
+
                         const file =
                             path.join(
                                 DATA_DIR,
                                 filename
                             );
 
-                        const stat =
-                            fs.statSync(
-                                file
-                            );
 
-                        result.push({
-                            name:
-                                filename,
+                        try {
 
-                            size:
-                                stat.size,
+                            const stat =
+                                fs.statSync(
+                                    file
+                                );
 
-                            modified:
-                                stat.mtime
-                        });
+
+                            result.push({
+
+                                name:
+                                    filename,
+
+                                size:
+                                    stat.size,
+
+                                modified:
+                                    stat.mtime
+                            });
+
+                        } catch {}
                     }
+
 
                     json(
                         res,
                         200,
                         {
+
                             success:
                                 true,
 
@@ -1853,22 +2642,37 @@ const server =
                         }
                     );
 
+
                     return;
                 }
 
+
+                /* =====================================================
+                   MODEL
+                ===================================================== */
+
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/model"
+                        "/api/model"
                 ) {
+
                     json(
                         res,
                         200,
                         {
+
                             success:
                                 true,
 
                             exists:
                                 fileExists(
+                                    MODEL_FILE
+                                ),
+
+                            bytes:
+                                safeFileSize(
                                     MODEL_FILE
                                 ),
 
@@ -1879,22 +2683,37 @@ const server =
                         }
                     );
 
+
                     return;
                 }
 
+
+                /* =====================================================
+                   TOKENIZER
+                ===================================================== */
+
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/tokenizer"
+                        "/api/tokenizer"
                 ) {
+
                     json(
                         res,
                         200,
                         {
+
                             success:
                                 true,
 
                             exists:
                                 fileExists(
+                                    TOKENIZER_FILE
+                                ),
+
+                            bytes:
+                                safeFileSize(
                                     TOKENIZER_FILE
                                 ),
 
@@ -1905,17 +2724,27 @@ const server =
                         }
                     );
 
+
                     return;
                 }
 
+
+                /* =====================================================
+                   CONFIG
+                ===================================================== */
+
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/config"
+                        "/api/config"
                 ) {
+
                     json(
                         res,
                         200,
                         {
+
                             success:
                                 true,
 
@@ -1926,17 +2755,27 @@ const server =
                         }
                     );
 
+
                     return;
                 }
 
+
+                /* =====================================================
+                   TRAINING STATUS
+                ===================================================== */
+
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/training-state"
+                        "/api/training-state"
                 ) {
+
                     json(
                         res,
                         200,
                         {
+
                             success:
                                 true,
 
@@ -1944,17 +2783,27 @@ const server =
                         }
                     );
 
+
                     return;
                 }
 
+
+                /* =====================================================
+                   GENERATION STATUS
+                ===================================================== */
+
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/generate/status"
+                        "/api/generate/status"
                 ) {
+
                     json(
                         res,
                         200,
                         {
+
                             success:
                                 true,
 
@@ -1962,32 +2811,82 @@ const server =
                         }
                     );
 
+
                     return;
                 }
+
+
+                /* =====================================================
+                   MANUELLES RELOAD
+                ===================================================== */
 
                 if (
+                    req.method ===
+                        "GET" &&
                     pathname ===
-                    "/api/reload"
+                        "/api/reload"
                 ) {
-                    json(
-                        res,
-                        200,
-                        {
-                            success:
-                                true,
 
-                            status:
-                                getStatus()
-                        }
-                    );
+                    try {
+
+                        startupRestorePromise =
+                            restoreLearnedFromGitHub();
+
+
+                        const github =
+                            await startupRestorePromise;
+
+
+                        startupReady =
+                            true;
+
+
+                        json(
+                            res,
+                            200,
+                            {
+
+                                success:
+                                    true,
+
+                                github,
+
+                                status:
+                                    getStatus()
+                            }
+                        );
+
+                    } catch (error) {
+
+                        startupReady =
+                            true;
+
+
+                        json(
+                            res,
+                            500,
+                            {
+
+                                success:
+                                    false,
+
+                                error:
+                                    error.message,
+
+                                status:
+                                    getStatus()
+                            }
+                        );
+                    }
+
 
                     return;
                 }
 
 
-                /* =================================================
-                   POST API
-                   ================================================= */
+                /* =====================================================
+                   TRAIN START
+                ===================================================== */
 
                 if (
                     req.method ===
@@ -1995,15 +2894,18 @@ const server =
                     pathname ===
                         "/api/train/start"
                 ) {
+
                     const body =
                         await readBody(
                             req
                         );
 
+
                     const result =
                         startTraining(
                             body
                         );
+
 
                     json(
                         res,
@@ -2013,8 +2915,14 @@ const server =
                         result
                     );
 
+
                     return;
                 }
+
+
+                /* =====================================================
+                   TRAIN STOP
+                ===================================================== */
 
                 if (
                     req.method ===
@@ -2022,8 +2930,10 @@ const server =
                     pathname ===
                         "/api/train/stop"
                 ) {
+
                     const result =
                         await stopTraining();
+
 
                     json(
                         res,
@@ -2031,8 +2941,14 @@ const server =
                         result
                     );
 
+
                     return;
                 }
+
+
+                /* =====================================================
+                   GENERATE
+                ===================================================== */
 
                 if (
                     req.method ===
@@ -2040,15 +2956,30 @@ const server =
                     pathname ===
                         "/api/generate"
                 ) {
+
+                    if (
+                        startupRestorePromise
+                    ) {
+
+                        try {
+
+                            await startupRestorePromise;
+
+                        } catch {}
+                    }
+
+
                     const body =
                         await readBody(
                             req
                         );
 
+
                     const result =
                         startGeneration(
                             body
                         );
+
 
                     json(
                         res,
@@ -2058,8 +2989,14 @@ const server =
                         result
                     );
 
+
                     return;
                 }
+
+
+                /* =====================================================
+                   GENERATE STOP
+                ===================================================== */
 
                 if (
                     req.method ===
@@ -2067,8 +3004,10 @@ const server =
                     pathname ===
                         "/api/generate/stop"
                 ) {
+
                     const result =
                         stopGeneration();
+
 
                     json(
                         res,
@@ -2076,15 +3015,46 @@ const server =
                         result
                     );
 
+
                     return;
                 }
 
 
-                /* =================================================
+                /* =====================================================
+                   HEALTH
+                ===================================================== */
+
+                if (
+                    req.method ===
+                        "GET" &&
+                    pathname ===
+                        "/health"
+                ) {
+
+                    json(
+                        res,
+                        200,
+                        {
+
+                            ok:
+                                true,
+
+                            ready:
+                                startupReady
+                        }
+                    );
+
+
+                    return;
+                }
+
+
+                /* =====================================================
                    STATIC FILES
-                   ================================================= */
+                ===================================================== */
 
                 let filePath;
+
 
                 if (
                     pathname ===
@@ -2092,18 +3062,42 @@ const server =
                     pathname ===
                         "/index.html"
                 ) {
+
                     filePath =
                         path.join(
                             ROOT,
                             "index.html"
                         );
+
                 } else {
+
+                    let decoded;
+
+
+                    try {
+
+                        decoded =
+                            decodeURIComponent(
+                                pathname
+                            );
+
+                    } catch {
+
+                        text(
+                            res,
+                            400,
+                            "Ungültiger Pfad."
+                        );
+
+                        return;
+                    }
+
+
                     const safePath =
                         path.normalize(
-                            pathname
-                        ).replace(
-                            /^(\\.\\.[/\\])+/, ""
+                            decoded
                         );
+
 
                     filePath =
                         path.join(
@@ -2112,26 +3106,32 @@ const server =
                         );
                 }
 
+
                 const rootResolved =
                     path.resolve(
                         ROOT
                     );
+
 
                 const fileResolved =
                     path.resolve(
                         filePath
                     );
 
+
+                const rootPrefix =
+                    rootResolved +
+                    path.sep;
+
+
                 if (
-                    !(
-                        fileResolved ===
-                            rootResolved ||
-                        fileResolved.startsWith(
-                            rootResolved +
-                            path.sep
-                        )
+                    fileResolved !==
+                        rootResolved &&
+                    !fileResolved.startsWith(
+                        rootPrefix
                     )
                 ) {
+
                     text(
                         res,
                         403,
@@ -2141,11 +3141,13 @@ const server =
                     return;
                 }
 
+
                 if (
                     !fileExists(
-                        filePath
+                        fileResolved
                     )
                 ) {
+
                     text(
                         res,
                         404,
@@ -2155,12 +3157,15 @@ const server =
                     return;
                 }
 
+
                 const extension =
                     path.extname(
-                        filePath
+                        fileResolved
                     ).toLowerCase();
 
-                const mime = {
+
+                const mimeTypes = {
+
                     ".html":
                         "text/html; charset=utf-8",
 
@@ -2190,44 +3195,63 @@ const server =
 
                     ".ico":
                         "image/x-icon"
-                }[
-                    extension
-                ] ||
-                "application/octet-stream";
+                };
+
+
+                const mime =
+                    mimeTypes[
+                        extension
+                    ] ||
+                    "application/octet-stream";
+
 
                 res.writeHead(
                     200,
                     {
+
                         "Content-Type":
                             mime,
 
                         "Cache-Control":
-                            "no-cache"
+                            "no-cache",
+
+                        "Access-Control-Allow-Origin":
+                            "*"
                     }
                 );
 
+
                 fs.createReadStream(
-                    filePath
-                ).pipe(res);
+                    fileResolved
+                ).pipe(
+                    res
+                );
+
 
                 return;
 
+
             } catch (error) {
+
                 console.error(
                     "[SERVER ERROR]",
                     error
                 );
 
+
                 if (
                     !res.headersSent
                 ) {
+
                     sendError(
                         res,
                         500,
                         "Interner Serverfehler.",
                         error
                     );
+
                 } else {
+
                     try {
                         res.end();
                     } catch {}
@@ -2239,18 +3263,19 @@ const server =
 
 /* =========================================================
    SERVER START
-   ========================================================= */
+========================================================= */
 
 server.listen(
     PORT,
     "0.0.0.0",
-    async () => {
+    () => {
+
         console.log(
             "======================================"
         );
 
         console.log(
-            " CubeGo"
+            " LUMORA"
         );
 
         console.log(
@@ -2270,51 +3295,6 @@ server.listen(
         console.log(
             "GELERNT:    " +
             LEARNED_DIR
-        );
-
-        console.log(
-            "GitHub:     " +
-            (
-                GITHUB_TOKEN
-                    ? "aktiv (" +
-                      GITHUB_OWNER +
-                      "/" +
-                      GITHUB_REPO +
-                      ")"
-                    : "nicht konfiguriert"
-            )
-        );
-
-        console.log(
-            "--------------------------------------"
-        );
-
-        /*
-         * WICHTIG:
-         * Nach einem Render-Neustart ist GELERNT normalerweise
-         * leer. Deshalb holen wir das gespeicherte Modell
-         * jetzt automatisch aus GitHub zurück.
-         */
-
-        if (GITHUB_TOKEN) {
-            try {
-                const restored =
-                    await restoreLearnedFromGitHub();
-
-                console.log(
-                    "[GITHUB] Wiederherstellung abgeschlossen:",
-                    restored
-                );
-            } catch (error) {
-                console.error(
-                    "[GITHUB] Wiederherstellung fehlgeschlagen:",
-                    error
-                );
-            }
-        }
-
-        console.log(
-            "--------------------------------------"
         );
 
         console.log(
@@ -2357,7 +3337,16 @@ server.listen(
         );
 
         console.log(
-            "--------------------------------------"
+            "GitHub:     " +
+            (
+                GITHUB_TOKEN
+                    ? "aktiv (" +
+                      GITHUB_OWNER +
+                      "/" +
+                      GITHUB_REPO +
+                      ")"
+                    : "nicht konfiguriert"
+            )
         );
 
         console.log(
@@ -2397,6 +3386,14 @@ server.listen(
         );
 
         console.log(
+            "GET  /api/reload"
+        );
+
+        console.log(
+            "GET  /health"
+        );
+
+        console.log(
             "POST /api/train/start"
         );
 
@@ -2415,72 +3412,158 @@ server.listen(
         console.log(
             "======================================"
         );
+
+
+        /*
+          GitHub-Wiederherstellung läuft
+          nach dem Öffnen des Ports.
+
+          Dadurch meldet Render seinen Port
+          sofort als aktiv.
+        */
+
+        startupRestorePromise =
+            restoreLearnedFromGitHub()
+                .catch(
+                    error => {
+
+                        console.error(
+                            "[GITHUB] Start-Wiederherstellung fehlgeschlagen:",
+                            error.message
+                        );
+
+
+                        return {
+                            success:
+                                false,
+
+                            restored:
+                                [],
+
+                            missing:
+                                [],
+
+                            failed: [
+                                {
+                                    file:
+                                        "startup",
+
+                                    error:
+                                        error.message
+                                }
+                            ]
+                        };
+                    }
+                )
+                .finally(
+                    () => {
+
+                        startupReady =
+                            true;
+
+
+                        console.log(
+                            "[START] LUMORA bereit."
+                        );
+
+
+                        console.log(
+                            "[START] model.json: " +
+                            safeFileSize(
+                                MODEL_FILE
+                            ) +
+                            " Bytes"
+                        );
+                    }
+                );
     }
 );
 
 
 /* =========================================================
-   SAUBERES BEENDEN
-   ========================================================= */
+   SHUTDOWN
+========================================================= */
 
-async function shutdown(
+function shutdown(
     signal
 ) {
+
     console.log(
         signal +
         " erhalten."
     );
 
-    if (trainingWorker) {
+
+    if (
+        trainingWorker
+    ) {
+
         try {
-            trainingWorker.postMessage({
-                type:
-                    "stop"
-            });
+
+            trainingWorker.postMessage(
+                {
+                    type:
+                        "stop"
+                }
+            );
+
         } catch {}
     }
 
-    if (generateWorker) {
+
+    if (
+        generateWorker
+    ) {
+
         try {
-            generateWorker.postMessage({
-                type:
-                    "stop"
-            });
+
+            generateWorker.postMessage(
+                {
+                    type:
+                        "stop"
+                }
+            );
+
         } catch {}
     }
+
 
     server.close(
         () => {
+
             process.exit(
                 0
             );
         }
     );
 
+
     setTimeout(
         () => {
+
             process.exit(
                 0
             );
+
         },
         5000
-    );
+    ).unref();
 }
+
 
 process.on(
     "SIGTERM",
-    () => {
+    () =>
         shutdown(
             "SIGTERM"
-        );
-    }
+        )
 );
+
 
 process.on(
     "SIGINT",
-    () => {
+    () =>
         shutdown(
             "SIGINT"
-        );
-    }
+        )
 );
