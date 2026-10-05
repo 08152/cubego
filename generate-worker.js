@@ -1,246 +1,314 @@
 "use strict";
 
 /*
-================================================================
-  generate-worker.js
-  LUMORA
-  - lädt GELERNT/model.json
-  - lädt GELERNT/tokenizer.json
-  - erzeugt echte Textantworten
-  - sendet beim Stream TEXT statt Token-IDs
-  - erkennt Spezialtokens zuverlässig
-  - kompatibel mit model.js + tokenizer.js
-================================================================
+============================================================
+  LUMORA - model.js
+============================================================
+
+  Stabiler, kleiner Sprachmodell-Kern
+
+  Kompatibel mit:
+    - train-worker.js
+    - generate-worker.js
+    - tokenizer.js
+
+  Funktionen:
+    - Token Embeddings
+    - Positionsinformationen
+    - Kontextverarbeitung
+    - Softmax
+    - Temperature
+    - Top-K
+    - Top-P
+    - Repetition Penalty
+    - echtes Training
+    - Gradient Clipping
+    - AdamW
+    - Speichern / Laden
+    - predictNext()
+    - generateTokens()
+    - generate()
+    - chat()
+
+============================================================
 */
 
-const fs = require("fs");
-const path = require("path");
-const {
-    parentPort,
-    workerData
-} = require("worker_threads");
+
+/* =========================================================
+   KONFIGURATION
+   ========================================================= */
+
+const DEFAULT_CONFIG = {
+
+    vocabSize: 8192,
+
+    contextSize: 16,
+
+    embeddingSize: 32,
+
+    learningRate: 0.0003,
+
+    beta1: 0.9,
+
+    beta2: 0.999,
+
+    weightDecay: 0.0001,
+
+    gradientClip: 1.0,
+
+    temperature: 0.8,
+
+    topK: 20,
+
+    topP: 0.9,
+
+    repetitionPenalty: 1.08,
+
+    minTemperature: 0.05,
+
+    maxTemperature: 2.0,
+
+    seed: 123456789
+};
 
 
 /* =========================================================
-   PFADE
+   HILFSFUNKTIONEN
    ========================================================= */
 
-const ROOT =
-    workerData.root || __dirname;
+function cloneConfig(config) {
 
-const GELERNT =
-    workerData.gelernt ||
-    path.join(
-        ROOT,
-        "GELERNT"
-    );
-
-const MODEL_FILE =
-    path.join(
-        GELERNT,
-        "model.json"
-    );
-
-const TOKENIZER_FILE =
-    path.join(
-        GELERNT,
-        "tokenizer.json"
-    );
-
-const CONFIG_FILE =
-    path.join(
-        GELERNT,
-        "config.json"
-    );
-
-
-/* =========================================================
-   STOP
-   ========================================================= */
-
-let stopped = false;
-
-if (parentPort) {
-    parentPort.on(
-        "message",
-        message => {
-            if (
-                message &&
-                (
-                    message.type === "stop" ||
-                    message.action === "stop"
-                )
-            ) {
-                stopped = true;
-            }
-        }
+    return Object.assign(
+        {},
+        DEFAULT_CONFIG,
+        config || {}
     );
 }
 
 
-/* =========================================================
-   KOMMUNIKATION
-   ========================================================= */
+function randomNormal() {
 
-function send(
-    type,
-    data = {}
-) {
-    if (!parentPort) {
-        return;
+    let u = 0;
+    let v = 0;
+
+    while (u === 0) {
+        u = Math.random();
     }
 
-    parentPort.postMessage({
-        type,
-        ...data
-    });
+    while (v === 0) {
+        v = Math.random();
+    }
+
+    return Math.sqrt(
+        -2 * Math.log(u)
+    ) * Math.cos(
+        2 * Math.PI * v
+    );
 }
 
 
-/* =========================================================
-   JSON
-   ========================================================= */
+function randomArray(size, scale) {
 
-function readJSON(file) {
-    return JSON.parse(
-        fs.readFileSync(
-            file,
-            "utf8"
+    const result =
+        new Float32Array(size);
+
+    for (
+        let i = 0;
+        i < size;
+        i++
+    ) {
+
+        result[i] =
+            randomNormal() *
+            scale;
+    }
+
+    return result;
+}
+
+
+function clamp(
+    value,
+    min,
+    max
+) {
+
+    return Math.max(
+        min,
+        Math.min(
+            max,
+            value
         )
     );
 }
 
 
-/* =========================================================
-   DATEI PRÜFEN
-   ========================================================= */
+function argmax(values) {
 
-function requireFile(
-    file,
-    message
-) {
-    if (
-        !fs.existsSync(file)
+    let best = 0;
+
+    for (
+        let i = 1;
+        i < values.length;
+        i++
     ) {
-        throw new Error(
-            message
-        );
-    }
-}
 
-
-/* =========================================================
-   TOKENIZER
-   ========================================================= */
-
-function loadTokenizerModule() {
-
-    const file =
-        path.join(
-            ROOT,
-            "tokenizer.js"
-        );
-
-    requireFile(
-        file,
-        "tokenizer.js wurde nicht gefunden."
-    );
-
-    delete require.cache[
-        require.resolve(file)
-    ];
-
-    const loaded =
-        require(file);
-
-    if (!loaded) {
-        throw new Error(
-            "tokenizer.js hat keinen Export."
-        );
-    }
-
-    return loaded;
-}
-
-
-function createTokenizer() {
-
-    const loaded =
-        loadTokenizerModule();
-
-    const AdvancedTokenizer =
-        loaded.AdvancedTokenizer ||
-        loaded.default ||
-        loaded;
-
-    if (
-        AdvancedTokenizer &&
-        typeof AdvancedTokenizer.create ===
-            "function"
-    ) {
-        return AdvancedTokenizer.create();
-    }
-
-    if (
-        typeof AdvancedTokenizer ===
-            "function"
-    ) {
-        return new AdvancedTokenizer();
-    }
-
-    throw new Error(
-        "AdvancedTokenizer konnte nicht erstellt werden."
-    );
-}
-
-
-function loadTokenizer() {
-
-    requireFile(
-        TOKENIZER_FILE,
-        "GELERNT/tokenizer.json wurde nicht gefunden. " +
-        "Trainiere LUMORA zuerst."
-    );
-
-    const tokenizer =
-        createTokenizer();
-
-    const saved =
-        readJSON(
-            TOKENIZER_FILE
-        );
-
-    if (
-        typeof tokenizer.import ===
-            "function"
-    ) {
-        tokenizer.import(
-            saved
-        );
-    }
-
-    else if (
-        typeof tokenizer.fromJSON ===
-            "function"
-    ) {
-        const result =
-            tokenizer.fromJSON(
-                saved
-            );
-
-        if (result) {
-            return result;
+        if (
+            values[i] >
+            values[best]
+        ) {
+            best = i;
         }
     }
 
-    else {
-        throw new Error(
-            "Tokenizer kann nicht geladen werden. " +
-            "import() bzw. fromJSON() fehlt."
+    return best;
+}
+
+
+/* =========================================================
+   SOFTMAX
+   ========================================================= */
+
+function softmax(
+    logits,
+    temperature
+) {
+
+    const result =
+        new Float32Array(
+            logits.length
         );
+
+    const t =
+        Math.max(
+            0.0001,
+            Number(
+                temperature || 1
+            )
+        );
+
+    let max =
+        -Infinity;
+
+    for (
+        let i = 0;
+        i < logits.length;
+        i++
+    ) {
+
+        const value =
+            logits[i] / t;
+
+        if (
+            value > max
+        ) {
+            max = value;
+        }
     }
 
-    return tokenizer;
+    let sum = 0;
+
+    for (
+        let i = 0;
+        i < logits.length;
+        i++
+    ) {
+
+        const value =
+            Math.exp(
+                clamp(
+                    logits[i] / t - max,
+                    -80,
+                    80
+                )
+            );
+
+        result[i] =
+            Number.isFinite(value)
+                ? value
+                : 0;
+
+        sum +=
+            result[i];
+    }
+
+    if (
+        !Number.isFinite(sum) ||
+        sum <= 0
+    ) {
+
+        const uniform =
+            1 /
+            Math.max(
+                1,
+                logits.length
+            );
+
+        result.fill(
+            uniform
+        );
+
+        return result;
+    }
+
+    for (
+        let i = 0;
+        i < result.length;
+        i++
+    ) {
+
+        result[i] /=
+            sum;
+    }
+
+    return result;
+}
+
+
+/* =========================================================
+   PARAMETER
+   ========================================================= */
+
+class Parameter {
+
+    constructor(
+        name,
+        size,
+        scale = 0.02
+    ) {
+
+        this.name =
+            name;
+
+        this.data =
+            randomArray(
+                size,
+                scale
+            );
+
+        this.grad =
+            new Float32Array(
+                size
+            );
+
+        this.m =
+            new Float32Array(
+                size
+            );
+
+        this.v =
+            new Float32Array(
+                size
+            );
+    }
+
+
+    zeroGrad() {
+
+        this.grad.fill(
+            0
+        );
+    }
 }
 
 
@@ -248,1383 +316,2162 @@ function loadTokenizer() {
    MODELL
    ========================================================= */
 
-function loadModelModule() {
+class LanguageModel {
 
-    const file =
-        path.join(
-            ROOT,
-            "model.js"
-        );
-
-    requireFile(
-        file,
-        "model.js wurde nicht gefunden."
-    );
-
-    delete require.cache[
-        require.resolve(file)
-    ];
-
-    const loaded =
-        require(file);
-
-    if (!loaded) {
-        throw new Error(
-            "model.js hat keinen Export."
-        );
-    }
-
-    return loaded;
-}
-
-
-function loadModel() {
-
-    requireFile(
-        MODEL_FILE,
-        "GELERNT/model.json wurde nicht gefunden. " +
-        "Trainiere LUMORA zuerst."
-    );
-
-    const module =
-        loadModelModule();
-
-    const Model =
-        module.LanguageModel ||
-        module.LargeLanguageModel ||
-        module.default ||
-        module;
-
-    if (
-        typeof Model !==
-            "function"
+    constructor(
+        userConfig
     ) {
-        throw new Error(
-            "LanguageModel konnte nicht geladen werden."
-        );
-    }
 
-    let config = {};
-
-    if (
-        fs.existsSync(
-            CONFIG_FILE
-        )
-    ) {
-        try {
-            const savedConfig =
-                readJSON(
-                    CONFIG_FILE
-                );
-
-            config =
-                savedConfig.model ||
-                savedConfig ||
-                {};
-        } catch {
-            config = {};
-        }
-    }
-
-    let model;
-
-    try {
-        model =
-            new Model(
-                config
+        this.config =
+            cloneConfig(
+                userConfig
             );
-    } catch {
-        model =
-            new Model();
+
+        const c =
+            this.config;
+
+        if (
+            !Number.isInteger(
+                c.vocabSize
+            ) ||
+            c.vocabSize <= 0
+        ) {
+
+            throw new Error(
+                "Ungültige vocabSize."
+            );
+        }
+
+        if (
+            !Number.isInteger(
+                c.contextSize
+            ) ||
+            c.contextSize <= 0
+        ) {
+
+            throw new Error(
+                "Ungültige contextSize."
+            );
+        }
+
+        if (
+            !Number.isInteger(
+                c.embeddingSize
+            ) ||
+            c.embeddingSize <= 0
+        ) {
+
+            throw new Error(
+                "Ungültige embeddingSize."
+            );
+        }
+
+
+        /*
+         * Token-Embedding
+         *
+         * Jeder Token bekommt einen
+         * trainierbaren Vektor.
+         */
+
+        this.tokenEmbedding =
+            new Parameter(
+                "token_embedding",
+                c.vocabSize *
+                c.embeddingSize,
+                0.02
+            );
+
+
+        /*
+         * Positions-Embedding
+         */
+
+        this.positionEmbedding =
+            new Parameter(
+                "position_embedding",
+                c.contextSize *
+                c.embeddingSize,
+                0.01
+            );
+
+
+        /*
+         * Output-Bias
+         */
+
+        this.outputBias =
+            new Parameter(
+                "output_bias",
+                c.vocabSize,
+                0
+            );
+
+
+        /*
+         * Anfangs etwas bessere
+         * numerische Stabilität.
+         */
+
+        this.outputBias.data.fill(
+            0
+        );
+
+
+        this.trainingStep = 0;
     }
 
-    const savedModel =
-        readJSON(
-            MODEL_FILE
-        );
 
-    if (
-        typeof model.load ===
-            "function"
-    ) {
-        model.load(
-            savedModel
-        );
+    /* =====================================================
+       PARAMETER
+       ===================================================== */
+
+    parameters() {
+
+        return [
+            this.tokenEmbedding,
+            this.positionEmbedding,
+            this.outputBias
+        ];
     }
 
-    else if (
-        typeof model.fromJSON ===
-            "function"
-    ) {
-        model.fromJSON(
-            savedModel
-        );
-    }
 
-    else {
-        throw new Error(
-            "Das Modell kann nicht geladen werden. " +
-            "load() bzw. fromJSON() fehlt."
-        );
-    }
+    parameterCount() {
 
-    return model;
-}
-
-
-/* =========================================================
-   PROMPT
-   ========================================================= */
-
-function buildPrompt(
-    prompt,
-    history,
-    systemPrompt
-) {
-    let result = "";
-
-    result +=
-        "<|system|>\n";
-
-    result +=
-        String(
-            systemPrompt ||
-            "Du bist LUMORA, eine hilfreiche KI."
-        );
-
-    result +=
-        "\n<|end|>\n";
-
-
-    if (
-        Array.isArray(history)
-    ) {
+        let count = 0;
 
         for (
-            const message of history
+            const parameter of
+            this.parameters()
         ) {
 
-            if (
-                !message ||
-                message.content ===
-                    undefined ||
-                message.content ===
-                    null
-            ) {
-                continue;
-            }
+            count +=
+                parameter.data.length;
+        }
 
-            let role =
-                message.role;
+        return count;
+    }
 
-            if (
-                role !== "user" &&
-                role !== "assistant" &&
-                role !== "system"
-            ) {
-                role = "user";
-            }
 
-            result +=
-                `<|${role}|>\n`;
+    zeroGradients() {
 
-            result +=
-                String(
-                    message.content
+        for (
+            const parameter of
+            this.parameters()
+        ) {
+
+            parameter.zeroGrad();
+        }
+    }
+
+
+    /* =====================================================
+       TOKEN EMBEDDING
+       ===================================================== */
+
+    getTokenEmbedding(
+        token
+    ) {
+
+        const d =
+            this.config.embeddingSize;
+
+        const result =
+            new Float32Array(d);
+
+        /*
+         * Ungültige Token-ID
+         * sicher abfangen.
+         */
+
+        if (
+            !Number.isInteger(token) ||
+            token < 0 ||
+            token >= this.config.vocabSize
+        ) {
+
+            return result;
+        }
+
+        const offset =
+            token * d;
+
+        for (
+            let i = 0;
+            i < d;
+            i++
+        ) {
+
+            result[i] =
+                this.tokenEmbedding
+                    .data[
+                        offset + i
+                    ];
+        }
+
+        return result;
+    }
+
+
+    /* =====================================================
+       POSITION EMBEDDING
+       ===================================================== */
+
+    getPositionEmbedding(
+        position
+    ) {
+
+        const d =
+            this.config.embeddingSize;
+
+        const result =
+            new Float32Array(d);
+
+        if (
+            position < 0 ||
+            position >=
+            this.config.contextSize
+        ) {
+
+            return result;
+        }
+
+        const offset =
+            position * d;
+
+        for (
+            let i = 0;
+            i < d;
+            i++
+        ) {
+
+            result[i] =
+                this.positionEmbedding
+                    .data[
+                        offset + i
+                    ];
+        }
+
+        return result;
+    }
+
+
+    /* =====================================================
+       KONTEXT-VEKTOR
+       ===================================================== */
+
+    buildContextVector(
+        tokens
+    ) {
+
+        const d =
+            this.config.embeddingSize;
+
+        const result =
+            new Float32Array(d);
+
+        if (
+            !tokens ||
+            tokens.length === 0
+        ) {
+
+            return result;
+        }
+
+
+        const start =
+            Math.max(
+                0,
+                tokens.length -
+                this.config.contextSize
+            );
+
+
+        let count = 0;
+
+
+        for (
+            let index = start;
+            index < tokens.length;
+            index++
+        ) {
+
+            const token =
+                tokens[index];
+
+            const position =
+                index - start;
+
+
+            const tokenVector =
+                this.getTokenEmbedding(
+                    token
                 );
 
-            result +=
-                "\n<|end|>\n";
+            const positionVector =
+                this.getPositionEmbedding(
+                    position
+                );
+
+
+            for (
+                let j = 0;
+                j < d;
+                j++
+            ) {
+
+                result[j] +=
+                    tokenVector[j] +
+                    positionVector[j];
+            }
+
+            count++;
         }
+
+
+        if (
+            count > 0
+        ) {
+
+            for (
+                let j = 0;
+                j < d;
+                j++
+            ) {
+
+                result[j] /=
+                    count;
+            }
+        }
+
+
+        return result;
     }
 
 
-    result +=
-        "<|user|>\n";
+    /* =====================================================
+       OUTPUT LOGITS
+       ===================================================== */
 
-    result +=
-        String(
-            prompt || ""
-        );
-
-    result +=
-        "\n<|end|>\n";
-
-    result +=
-        "<|assistant|>\n";
-
-    return result;
-}
-
-
-/* =========================================================
-   TOKENIZER → TOKEN TEXT
-   ========================================================= */
-
-function getTokenText(
-    tokenizer,
-    tokenId
-) {
-
-    if (
-        tokenizer &&
-        tokenizer.idToToken instanceof Map
+    outputLogits(
+        hidden
     ) {
-        const token =
-            tokenizer.idToToken.get(
-                tokenId
+
+        const vocab =
+            this.config.vocabSize;
+
+        const d =
+            this.config.embeddingSize;
+
+        const result =
+            new Float32Array(
+                vocab
             );
 
-        if (
-            typeof token ===
-                "string"
+
+        const scale =
+            1 /
+            Math.sqrt(d);
+
+
+        for (
+            let token = 0;
+            token < vocab;
+            token++
         ) {
-            return token;
+
+            const offset =
+                token * d;
+
+            let sum =
+                this.outputBias
+                    .data[token];
+
+
+            for (
+                let j = 0;
+                j < d;
+                j++
+            ) {
+
+                sum +=
+                    hidden[j] *
+                    this.tokenEmbedding
+                        .data[
+                            offset + j
+                        ];
+            }
+
+
+            result[token] =
+                sum * scale;
         }
+
+
+        return result;
     }
 
 
-    if (
-        tokenizer &&
-        typeof tokenizer.getToken ===
-            "function"
+    /* =====================================================
+       FORWARD
+       ===================================================== */
+
+    forward(
+        tokens
     ) {
 
-        const info =
-            tokenizer.getToken(
-                tokenId
+        if (
+            !Array.isArray(tokens) ||
+            tokens.length === 0
+        ) {
+
+            return [];
+        }
+
+
+        const hidden =
+            this.buildContextVector(
+                tokens
             );
 
-        if (
-            info &&
-            typeof info.text ===
-                "string"
-        ) {
-            return info.text;
-        }
+
+        return [
+            this.outputLogits(
+                hidden
+            )
+        ];
     }
 
-    return null;
-}
 
+    /* =====================================================
+       REPETITION PENALTY
+       ===================================================== */
 
-/* =========================================================
-   SPEZIALTOKEN
-   ========================================================= */
-
-const STOP_TOKENS =
-    new Set([
-        "<|end|>",
-        "<|eos|>",
-        "<|user|>",
-        "<|system|>",
-        "<|tool|>",
-        "<|assistant|>"
-    ]);
-
-
-function isStopToken(
-    tokenizer,
-    tokenId
-) {
-    const token =
-        getTokenText(
-            tokenizer,
-            tokenId
-        );
-
-    if (
-        typeof token !==
-            "string"
-    ) {
-        return false;
-    }
-
-    return STOP_TOKENS.has(
-        token
-    );
-}
-
-
-/* =========================================================
-   LOGITS → TOKEN
-   ========================================================= */
-
-function applyRepetitionPenalty(
-    logits,
-    previousTokens,
-    penalty
-) {
-    if (
-        !Number.isFinite(
-            penalty
-        ) ||
-        penalty <= 1
-    ) {
-        return Array.from(
-            logits
-        );
-    }
-
-    const result =
-        Array.from(
-            logits
-        );
-
-    const used =
-        new Set(
-            previousTokens
-        );
-
-    for (
-        const tokenId of used
+    applyRepetitionPenalty(
+        logits,
+        tokens,
+        penalty
     ) {
 
-        if (
-            tokenId < 0 ||
-            tokenId >= result.length
-        ) {
-            continue;
-        }
-
-        const value =
-            Number(
-                result[tokenId]
+        const result =
+            new Float32Array(
+                logits
             );
 
         if (
             !Number.isFinite(
-                value
-            )
+                penalty
+            ) ||
+            penalty <= 1
         ) {
-            continue;
-        }
 
-        if (
-            value > 0
-        ) {
-            result[tokenId] =
-                value / penalty;
-        } else {
-            result[tokenId] =
-                value * penalty;
-        }
-    }
-
-    return result;
-}
-
-
-function sampleFromLogits(
-    logits,
-    previousTokens,
-    settings
-) {
-    const values =
-        Array.from(
-            logits
-        );
-
-    if (
-        values.length === 0
-    ) {
-        throw new Error(
-            "Keine Logits erhalten."
-        );
-    }
-
-
-    const temperature =
-        Math.max(
-            0.05,
-            Number(
-                settings.temperature ||
-                0.8
-            )
-        );
-
-
-    const repetitionPenalty =
-        Math.max(
-            1,
-            Number(
-                settings.repetitionPenalty ||
-                1.08
-            )
-        );
-
-
-    const adjusted =
-        applyRepetitionPenalty(
-            values,
-            previousTokens,
-            repetitionPenalty
-        );
-
-
-    let max =
-        -Infinity;
-
-    for (
-        const value of adjusted
-    ) {
-        if (
-            Number.isFinite(value) &&
-            value > max
-        ) {
-            max = value;
-        }
-    }
-
-    if (
-        !Number.isFinite(max)
-    ) {
-        throw new Error(
-            "Die Logits enthalten keine gültigen Werte."
-        );
-    }
-
-
-    const probabilities =
-        new Array(
-            adjusted.length
-        );
-
-
-    let total = 0;
-
-    for (
-        let i = 0;
-        i < adjusted.length;
-        i++
-    ) {
-
-        const value =
-            adjusted[i];
-
-        if (
-            !Number.isFinite(value)
-        ) {
-            probabilities[i] = 0;
-            continue;
-        }
-
-        const scaled =
-            (
-                value - max
-            ) /
-            temperature;
-
-        const probability =
-            Math.exp(
-                Math.max(
-                    -80,
-                    Math.min(
-                        80,
-                        scaled
-                    )
-                )
-            );
-
-        probabilities[i] =
-            Number.isFinite(
-                probability
-            )
-                ? probability
-                : 0;
-
-        total +=
-            probabilities[i];
-    }
-
-
-    if (
-        !Number.isFinite(total) ||
-        total <= 0
-    ) {
-        return 0;
-    }
-
-
-    let candidates = [];
-
-    for (
-        let i = 0;
-        i < probabilities.length;
-        i++
-    ) {
-
-        if (
-            probabilities[i] > 0
-        ) {
-            candidates.push({
-                index: i,
-                probability:
-                    probabilities[i]
-            });
-        }
-    }
-
-
-    candidates.sort(
-        (a, b) =>
-            b.probability -
-            a.probability
-    );
-
-
-    const topK =
-        Math.max(
-            1,
-            Math.min(
-                candidates.length,
-                Math.floor(
-                    Number(
-                        settings.topK ||
-                        20
-                    )
-                )
-            )
-        );
-
-
-    candidates =
-        candidates.slice(
-            0,
-            topK
-        );
-
-
-    const topP =
-        Math.max(
-            0.05,
-            Math.min(
-                1,
-                Number(
-                    settings.topP ||
-                    0.9
-                )
-            )
-        );
-
-
-    const filtered = [];
-
-    let cumulative =
-        0;
-
-    for (
-        const candidate of candidates
-    ) {
-
-        cumulative +=
-            candidate.probability /
-            total;
-
-        filtered.push(
-            candidate
-        );
-
-        if (
-            cumulative >=
-            topP
-        ) {
-            break;
-        }
-    }
-
-
-    let sum = 0;
-
-    for (
-        const candidate of filtered
-    ) {
-        sum +=
-            candidate.probability;
-    }
-
-
-    if (
-        sum <= 0
-    ) {
-        return filtered[0].index;
-    }
-
-
-    let random =
-        Math.random() *
-        sum;
-
-
-    for (
-        const candidate of filtered
-    ) {
-
-        random -=
-            candidate.probability;
-
-        if (
-            random <= 0
-        ) {
-            return candidate.index;
-        }
-    }
-
-
-    return filtered[
-        filtered.length - 1
-    ].index;
-}
-
-
-/* =========================================================
-   MODEL RESULT → TOKEN-ID
-   ========================================================= */
-
-function extractToken(
-    result,
-    tokens,
-    settings
-) {
-    const vocabularyLimit =
-        Number.isFinite(
-            settings.vocabSize
-        )
-            ? settings.vocabSize
-            : Infinity;
-
-
-    if (
-        typeof result ===
-            "number"
-    ) {
-
-        if (
-            Number.isInteger(result) &&
-            result >= 0 &&
-            result < vocabularyLimit
-        ) {
             return result;
         }
+
+
+        const used =
+            new Set(
+                tokens
+            );
+
+
+        for (
+            const token of
+            used
+        ) {
+
+            if (
+                token < 0 ||
+                token >=
+                result.length
+            ) {
+                continue;
+            }
+
+
+            if (
+                result[token] > 0
+            ) {
+
+                result[token] /=
+                    penalty;
+
+            } else {
+
+                result[token] *=
+                    penalty;
+            }
+        }
+
+
+        return result;
     }
 
 
-    if (
-        result &&
-        typeof result.token ===
-            "number"
+    /* =====================================================
+       TOP-K
+       ===================================================== */
+
+    applyTopK(
+        probabilities,
+        k
     ) {
 
         if (
-            Number.isInteger(
-                result.token
-            ) &&
-            result.token >= 0 &&
-            result.token < vocabularyLimit
+            !Number.isInteger(k) ||
+            k <= 0 ||
+            k >=
+            probabilities.length
         ) {
-            return result.token;
+
+            return probabilities;
         }
-    }
 
 
-    if (
-        result &&
-        typeof result.tokenId ===
-            "number"
-    ) {
-
-        if (
-            Number.isInteger(
-                result.tokenId
-            ) &&
-            result.tokenId >= 0 &&
-            result.tokenId < vocabularyLimit
-        ) {
-            return result.tokenId;
-        }
-    }
-
-
-    let logits = null;
-
-
-    if (
-        result &&
-        (
-            Array.isArray(
-                result.logits
-            ) ||
-            ArrayBuffer.isView(
-                result.logits
-            )
-        )
-    ) {
-
-        logits =
+        const indexes =
             Array.from(
-                result.logits
-            );
-    }
-
-
-    else if (
-        Array.isArray(
-            result
-        ) ||
-        ArrayBuffer.isView(
-            result
-        )
-    ) {
-
-        logits =
-            Array.from(
-                result
-            );
-    }
-
-
-    if (
-        logits
-    ) {
-        return sampleFromLogits(
-            logits,
-            tokens,
-            settings
-        );
-    }
-
-
-    throw new Error(
-        "Das Modell hat weder eine Token-ID noch Logits zurückgegeben."
-    );
-}
-
-
-/* =========================================================
-   VOKABULARGRÖSSE
-   ========================================================= */
-
-function getVocabSize(
-    tokenizer,
-    model
-) {
-    let tokenizerSize = 0;
-
-
-    if (
-        tokenizer &&
-        Array.isArray(
-            tokenizer.vocabulary
-        )
-    ) {
-        tokenizerSize =
-            tokenizer.vocabulary.length;
-    }
-
-
-    else if (
-        tokenizer &&
-        tokenizer.idToToken instanceof Map
-    ) {
-        tokenizerSize =
-            tokenizer.idToToken.size;
-    }
-
-
-    else if (
-        tokenizer &&
-        Number.isInteger(
-            tokenizer.vocabSize
-        )
-    ) {
-        tokenizerSize =
-            tokenizer.vocabSize;
-    }
-
-
-    const modelSize =
-        Number(
-            model &&
-            model.config &&
-            model.config.vocabSize
-        );
-
-
-    if (
-        tokenizerSize > 0 &&
-        Number.isFinite(modelSize) &&
-        modelSize > 0
-    ) {
-        return Math.min(
-            tokenizerSize,
-            modelSize
-        );
-    }
-
-
-    if (
-        tokenizerSize > 0
-    ) {
-        return tokenizerSize;
-    }
-
-
-    if (
-        Number.isFinite(
-            modelSize
-        ) &&
-        modelSize > 0
-    ) {
-        return Math.floor(
-            modelSize
-        );
-    }
-
-
-    return 1;
-}
-
-
-/* =========================================================
-   GENERATION
-   ========================================================= */
-
-async function generate(
-    model,
-    tokenizer,
-    prompt,
-    options
-) {
-    const settings = {
-
-        maxTokens:
-            Math.max(
-                1,
-                Math.min(
-                    512,
-                    Math.floor(
-                        Number(
-                            options.maxTokens ??
-                            160
-                        )
-                    )
-                )
-            ),
-
-        temperature:
-            Math.max(
-                0.05,
-                Math.min(
-                    2,
-                    Number(
-                        options.temperature ??
-                        0.8
-                    )
-                )
-            ),
-
-        topK:
-            Math.max(
-                1,
-                Math.floor(
-                    Number(
-                        options.topK ??
-                        20
-                    )
-                )
-            ),
-
-        topP:
-            Math.max(
-                0.05,
-                Math.min(
-                    1,
-                    Number(
-                        options.topP ??
-                        0.9
-                    )
-                )
-            ),
-
-        repetitionPenalty:
-            Math.max(
-                1,
-                Number(
-                    options.repetitionPenalty ??
-                    1.08
-                )
-            ),
-
-        vocabSize:
-            getVocabSize(
-                tokenizer,
-                model
-            )
-    };
-
-
-    const formattedPrompt =
-        buildPrompt(
-            prompt,
-            options.history,
-            options.systemPrompt
-        );
-
-
-    const inputTokens =
-        tokenizer.encode(
-            formattedPrompt
-        );
-
-
-    if (
-        !Array.isArray(
-            inputTokens
-        ) ||
-        inputTokens.length === 0
-    ) {
-        throw new Error(
-            "Der Prompt konnte nicht tokenisiert werden."
-        );
-    }
-
-
-    let tokens =
-        Array.from(
-            inputTokens
-        );
-
-
-    const generated = [];
-
-    let previousText =
-        "";
-
-
-    const contextSize =
-        Number(
-            model &&
-            model.config &&
-            model.config.contextSize ||
-            256
-        );
-
-
-    for (
-        let step = 0;
-        step < settings.maxTokens;
-        step++
-    ) {
-
-        if (stopped) {
-            break;
-        }
-
-
-        let context =
-            tokens;
-
-
-        if (
-            context.length >
-            contextSize
-        ) {
-
-            context =
-                context.slice(
-                    context.length -
-                    contextSize
-                );
-        }
-
-
-        let result;
-
-
-        if (
-            typeof model.predictNext ===
-                "function"
-        ) {
-
-            result =
-                await model.predictNext(
-                    context,
-                    settings
-                );
-        }
-
-        else if (
-            typeof model.generateNext ===
-                "function"
-        ) {
-
-            result =
-                await model.generateNext(
-                    context,
-                    settings
-                );
-        }
-
-        else if (
-            typeof model.forward ===
-                "function"
-        ) {
-
-            result =
-                await model.forward(
-                    context
-                );
-        }
-
-        else {
-            throw new Error(
-                "LUMORA besitzt keine Token-Vorhersagefunktion."
-            );
-        }
-
-
-        const nextToken =
-            extractToken(
-                result,
-                tokens,
-                settings
-            );
-
-
-        if (
-            !Number.isInteger(
-                nextToken
-            ) ||
-            nextToken < 0 ||
-            nextToken >=
-                settings.vocabSize
-        ) {
-
-            throw new Error(
-                "Ungültige Token-ID: " +
-                String(
-                    nextToken
-                )
-            );
-        }
-
-
-        /*
-         * Spezialtoken erkennen,
-         * bevor es in die Antwort gelangt.
-         */
-        if (
-            isStopToken(
-                tokenizer,
-                nextToken
-            )
-        ) {
-            break;
-        }
-
-
-        tokens.push(
-            nextToken
-        );
-
-        generated.push(
-            nextToken
-        );
-
-
-        /*
-         * WICHTIG:
-         *
-         * Nicht die Token-ID an den Server schicken.
-         * Stattdessen den dekodierten Text.
-         */
-        let partial = "";
-
-        try {
-            partial =
-                tokenizer.decode(
-                    generated
-                );
-        } catch (error) {
-            throw new Error(
-                "Tokenizer-Decodierung fehlgeschlagen: " +
-                error.message
-            );
-        }
-
-
-        /*
-         * Nur den NEUEN Text senden.
-         * Dadurch hängt der Server nicht
-         * jedes Mal die komplette Antwort
-         * erneut an.
-         */
-        let delta = partial;
-
-        if (
-            partial.startsWith(
-                previousText
-            )
-        ) {
-            delta =
-                partial.slice(
-                    previousText.length
-                );
-        }
-
-
-        previousText =
-            partial;
-
-
-        /*
-         * Server bekommt TEXT.
-         */
-        send(
-            "token",
-            {
-                token:
-                    String(
-                        delta
-                    ),
-
-                text:
-                    String(
-                        partial
-                    ),
-
-                tokenId:
-                    nextToken,
-
-                index:
-                    step
-            }
-        );
-
-
-        /*
-         * Event Loop freigeben.
-         */
-        if (
-            step % 2 === 0
-        ) {
-            await new Promise(
-                resolve =>
-                    setImmediate(
-                        resolve
-                    )
-            );
-        }
-    }
-
-
-    /*
-     * Gesamte Antwort am Ende
-     * noch einmal sauber dekodieren.
-     */
-    let answer = "";
-
-    try {
-        answer =
-            tokenizer.decode(
-                generated
-            );
-    } catch (error) {
-        throw new Error(
-            "Antwort konnte nicht dekodiert werden: " +
-            error.message
-        );
-    }
-
-
-    /*
-     * Sicherheit:
-     * Spezialmarker aus der sichtbaren
-     * Antwort entfernen.
-     */
-    const stopStrings = [
-        "<|end|>",
-        "<|eos|>",
-        "<|user|>",
-        "<|system|>",
-        "<|tool|>",
-        "<|assistant|>"
-    ];
-
-
-    for (
-        const stopString of
-        stopStrings
-    ) {
-
-        const index =
-            answer.indexOf(
-                stopString
-            );
-
-        if (
-            index !== -1
-        ) {
-            answer =
-                answer.substring(
-                    0,
-                    index
-                );
-        }
-    }
-
-
-    answer =
-        answer
-            .replace(
-                /\r\n/g,
-                "\n"
-            )
-            .trim();
-
-
-    return {
-        answer,
-
-        tokens:
-            generated.length,
-
-        promptTokens:
-            inputTokens.length
-    };
-}
-
-
-/* =========================================================
-   MAIN
-   ========================================================= */
-
-async function main() {
-
-    try {
-
-        send(
-            "status",
-            {
-                message:
-                    "LUMORA wird geladen..."
-            }
-        );
-
-
-        if (stopped) {
-            send(
-                "complete",
                 {
-                    answer: "",
-                    stopped: true
-                }
+                    length:
+                        probabilities.length
+                },
+                (_, i) => i
             );
-            return;
-        }
 
 
-        send(
-            "status",
-            {
-                message:
-                    "Tokenizer wird geladen..."
-            }
-        );
-
-
-        const tokenizer =
-            loadTokenizer();
-
-
-        if (stopped) {
-            send(
-                "complete",
-                {
-                    answer: "",
-                    stopped: true
-                }
-            );
-            return;
-        }
-
-
-        send(
-            "status",
-            {
-                message:
-                    "Modell wird geladen..."
-            }
-        );
-
-
-        const model =
-            loadModel();
-
-
-        if (stopped) {
-            send(
-                "complete",
-                {
-                    answer: "",
-                    stopped: true
-                }
-            );
-            return;
-        }
-
-
-        send(
-            "status",
-            {
-                message:
-                    "LUMORA ist bereit."
-            }
+        indexes.sort(
+            (a, b) =>
+                probabilities[b] -
+                probabilities[a]
         );
 
 
         const result =
-            await generate(
-                model,
-                tokenizer,
-                workerData.prompt || "",
-                workerData.options || {}
+            new Float32Array(
+                probabilities.length
             );
 
 
-        send(
-            "complete",
-            {
-                answer:
-                    result.answer,
+        let sum = 0;
 
-                tokens:
-                    result.tokens,
 
-                promptTokens:
-                    result.promptTokens
+        for (
+            let i = 0;
+            i < k;
+            i++
+        ) {
+
+            const index =
+                indexes[i];
+
+            result[index] =
+                probabilities[index];
+
+            sum +=
+                result[index];
+        }
+
+
+        if (
+            sum > 0
+        ) {
+
+            for (
+                let i = 0;
+                i < result.length;
+                i++
+            ) {
+
+                result[i] /=
+                    sum;
             }
+        }
+
+
+        return result;
+    }
+
+
+    /* =====================================================
+       TOP-P
+       ===================================================== */
+
+    applyTopP(
+        probabilities,
+        p
+    ) {
+
+        if (
+            !Number.isFinite(p) ||
+            p >= 1
+        ) {
+
+            return probabilities;
+        }
+
+
+        const sorted =
+            Array.from(
+                {
+                    length:
+                        probabilities.length
+                },
+                (_, i) => ({
+                    token: i,
+                    probability:
+                        probabilities[i]
+                })
+            );
+
+
+        sorted.sort(
+            (a, b) =>
+                b.probability -
+                a.probability
         );
 
-    } catch (error) {
 
-        console.error(
-            "GENERATE-WORKER ERROR:",
-            error
-        );
+        const result =
+            new Float32Array(
+                probabilities.length
+            );
 
-        send(
-            "error",
-            {
-                error:
-                    error.message,
 
-                stack:
-                    error.stack
+        let cumulative = 0;
+        let sum = 0;
+
+
+        for (
+            const item of
+            sorted
+        ) {
+
+            if (
+                item.probability <= 0
+            ) {
+                continue;
             }
+
+
+            result[item.token] =
+                item.probability;
+
+            sum +=
+                item.probability;
+
+            cumulative +=
+                item.probability;
+
+
+            if (
+                cumulative >= p
+            ) {
+                break;
+            }
+        }
+
+
+        if (
+            sum > 0
+        ) {
+
+            for (
+                let i = 0;
+                i < result.length;
+                i++
+            ) {
+
+                result[i] /=
+                    sum;
+            }
+        }
+
+
+        return result;
+    }
+
+
+    /* =====================================================
+       NÄCHSTEN TOKEN VORHERSAGEN
+       ===================================================== */
+
+    predictNext(
+        tokens,
+        options
+    ) {
+
+        options =
+            options || {};
+
+
+        const temperature =
+            clamp(
+                Number(
+                    options.temperature ??
+                    this.config.temperature
+                ),
+                this.config.minTemperature,
+                this.config.maxTemperature
+            );
+
+
+        let logitsSequence =
+            this.forward(
+                tokens
+            );
+
+
+        if (
+            !logitsSequence.length
+        ) {
+
+            return {
+                token: 0,
+                probabilities:
+                    new Float32Array(
+                        this.config.vocabSize
+                    ),
+                logits:
+                    new Float32Array(
+                        this.config.vocabSize
+                    )
+            };
+        }
+
+
+        let logits =
+            logitsSequence[
+                logitsSequence.length - 1
+            ];
+
+
+        logits =
+            this.applyRepetitionPenalty(
+                logits,
+                tokens || [],
+                Number(
+                    options.repetitionPenalty ??
+                    this.config.repetitionPenalty
+                )
+            );
+
+
+        let probabilities =
+            softmax(
+                logits,
+                temperature
+            );
+
+
+        probabilities =
+            this.applyTopK(
+                probabilities,
+                Number(
+                    options.topK ??
+                    this.config.topK
+                )
+            );
+
+
+        probabilities =
+            this.applyTopP(
+                probabilities,
+                Number(
+                    options.topP ??
+                    this.config.topP
+                )
+            );
+
+
+        let token;
+
+
+        if (
+            options.greedy
+        ) {
+
+            token =
+                argmax(
+                    probabilities
+                );
+
+        } else {
+
+            let random =
+                Math.random();
+
+            token = 0;
+
+
+            for (
+                let i = 0;
+                i < probabilities.length;
+                i++
+            ) {
+
+                random -=
+                    probabilities[i];
+
+                if (
+                    random <= 0
+                ) {
+
+                    token = i;
+                    break;
+                }
+            }
+        }
+
+
+        return {
+            token,
+            probabilities,
+            logits
+        };
+    }
+
+
+    /* =====================================================
+       CROSS ENTROPY
+       ===================================================== */
+
+    crossEntropy(
+        logits,
+        target
+    ) {
+
+        if (
+            !Number.isInteger(target) ||
+            target < 0 ||
+            target >= logits.length
+        ) {
+
+            return 0;
+        }
+
+
+        const probabilities =
+            softmax(
+                logits,
+                1
+            );
+
+
+        return -Math.log(
+            Math.max(
+                probabilities[target],
+                1e-12
+            )
+        );
+    }
+
+
+    /* =====================================================
+       TRAINING
+       ===================================================== */
+
+    trainStep(
+        tokens
+    ) {
+
+        return this.trainBackprop(
+            tokens
+        );
+    }
+
+
+    trainBackprop(
+        tokens
+    ) {
+
+        if (
+            !Array.isArray(tokens) ||
+            tokens.length < 2
+        ) {
+
+            return {
+                loss: 0,
+                gradientNorm: 0
+            };
+        }
+
+
+        this.zeroGradients();
+
+
+        const d =
+            this.config.embeddingSize;
+
+        const vocab =
+            this.config.vocabSize;
+
+
+        const contextLength =
+            Math.min(
+                this.config.contextSize,
+                tokens.length - 1
+            );
+
+
+        const start =
+            Math.max(
+                0,
+                tokens.length -
+                contextLength -
+                1
+            );
+
+
+        let totalLoss = 0;
+        let examples = 0;
+
+
+        /*
+         * Wir trainieren auf jedem möglichen
+         * nächsten Token innerhalb des letzten
+         * Kontextfensters.
+         */
+
+        for (
+            let position = start;
+            position <
+            tokens.length - 1;
+            position++
+        ) {
+
+            const contextStart =
+                Math.max(
+                    start,
+                    position -
+                    this.config.contextSize +
+                    1
+                );
+
+
+            const context = [];
+
+
+            for (
+                let i = contextStart;
+                i <= position;
+                i++
+            ) {
+
+                context.push(
+                    tokens[i]
+                );
+            }
+
+
+            const target =
+                tokens[
+                    position + 1
+                ];
+
+
+            if (
+                !Number.isInteger(
+                    target
+                ) ||
+                target < 0 ||
+                target >= vocab
+            ) {
+
+                continue;
+            }
+
+
+            const hidden =
+                this.buildContextVector(
+                    context
+                );
+
+
+            const logits =
+                this.outputLogits(
+                    hidden
+                );
+
+
+            const probabilities =
+                softmax(
+                    logits,
+                    1
+                );
+
+
+            totalLoss +=
+                this.crossEntropy(
+                    logits,
+                    target
+                );
+
+            examples++;
+
+
+            /*
+             * dL / dLogits
+             */
+
+            probabilities[target] -=
+                1;
+
+
+            /*
+             * Gradient für Output-Bias
+             */
+
+            for (
+                let token = 0;
+                token < vocab;
+                token++
+            ) {
+
+                this.outputBias.grad[
+                    token
+                ] +=
+                    probabilities[token];
+            }
+
+
+            /*
+             * Gradient für das geteilte
+             * Output-Embedding.
+             *
+             * output =
+             * hidden · embedding[token]
+             */
+
+            const scale =
+                1 /
+                Math.sqrt(d);
+
+
+            const hiddenGradient =
+                new Float32Array(d);
+
+
+            for (
+                let token = 0;
+                token < vocab;
+                token++
+            ) {
+
+                const probability =
+                    probabilities[token];
+
+
+                if (
+                    Math.abs(
+                        probability
+                    ) < 1e-12
+                ) {
+
+                    continue;
+                }
+
+
+                const offset =
+                    token * d;
+
+
+                for (
+                    let j = 0;
+                    j < d;
+                    j++
+                ) {
+
+                    this.tokenEmbedding.grad[
+                        offset + j
+                    ] +=
+                        probability *
+                        hidden[j] *
+                        scale;
+
+
+                    hiddenGradient[j] +=
+                        probability *
+                        this.tokenEmbedding
+                            .data[
+                                offset + j
+                            ] *
+                        scale;
+                }
+            }
+
+
+            /*
+             * Der Kontextvektor ist ein Durchschnitt
+             * aus Token- und Positions-Embeddings.
+             *
+             * Deshalb geben wir den Gradienten
+             * an alle beteiligten Embeddings weiter.
+             */
+
+            const count =
+                context.length;
+
+
+            if (
+                count > 0
+            ) {
+
+                const divisor =
+                    1 / count;
+
+
+                for (
+                    let i = 0;
+                    i < context.length;
+                    i++
+                ) {
+
+                    const token =
+                        context[i];
+
+
+                    if (
+                        token >= 0 &&
+                        token < vocab
+                    ) {
+
+                        const tokenOffset =
+                            token * d;
+
+
+                        const position =
+                            i;
+
+
+                        const positionOffset =
+                            position * d;
+
+
+                        for (
+                            let j = 0;
+                            j < d;
+                            j++
+                        ) {
+
+                            const gradient =
+                                hiddenGradient[j] *
+                                divisor;
+
+
+                            this.tokenEmbedding.grad[
+                                tokenOffset + j
+                            ] +=
+                                gradient;
+
+
+                            if (
+                                position <
+                                this.config.contextSize
+                            ) {
+
+                                this.positionEmbedding.grad[
+                                    positionOffset + j
+                                ] +=
+                                    gradient;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
+        if (
+            examples === 0
+        ) {
+
+            return {
+                loss: 0,
+                gradientNorm: 0
+            };
+        }
+
+
+        const gradientNorm =
+            this.clipGradients(
+                this.config.gradientClip
+            );
+
+
+        this.optimizerStep();
+
+
+        return {
+            loss:
+                totalLoss /
+                examples,
+
+            gradientNorm
+        };
+    }
+
+
+    /* =====================================================
+       GRADIENT CLIPPING
+       ===================================================== */
+
+    clipGradients(
+        maxNorm
+    ) {
+
+        let sum = 0;
+
+
+        for (
+            const parameter of
+            this.parameters()
+        ) {
+
+            for (
+                let i = 0;
+                i < parameter.grad.length;
+                i++
+            ) {
+
+                const value =
+                    parameter.grad[i];
+
+                if (
+                    Number.isFinite(
+                        value
+                    )
+                ) {
+
+                    sum +=
+                        value * value;
+                }
+            }
+        }
+
+
+        const norm =
+            Math.sqrt(sum);
+
+
+        if (
+            !Number.isFinite(norm) ||
+            norm <= maxNorm ||
+            norm === 0
+        ) {
+
+            return Number.isFinite(norm)
+                ? norm
+                : 0;
+        }
+
+
+        const scale =
+            maxNorm /
+            norm;
+
+
+        for (
+            const parameter of
+            this.parameters()
+        ) {
+
+            for (
+                let i = 0;
+                i < parameter.grad.length;
+                i++
+            ) {
+
+                parameter.grad[i] *=
+                    scale;
+            }
+        }
+
+
+        return norm;
+    }
+
+
+    /* =====================================================
+       ADAMW
+       ===================================================== */
+
+    optimizerStep() {
+
+        this.trainingStep++;
+
+
+        const lr =
+            this.config.learningRate;
+
+        const beta1 =
+            this.config.beta1;
+
+        const beta2 =
+            this.config.beta2;
+
+        const decay =
+            this.config.weightDecay;
+
+
+        const correction1 =
+            1 -
+            Math.pow(
+                beta1,
+                this.trainingStep
+            );
+
+        const correction2 =
+            1 -
+            Math.pow(
+                beta2,
+                this.trainingStep
+            );
+
+
+        for (
+            const parameter of
+            this.parameters()
+        ) {
+
+            for (
+                let i = 0;
+                i < parameter.data.length;
+                i++
+            ) {
+
+                let gradient =
+                    parameter.grad[i];
+
+
+                if (
+                    !Number.isFinite(
+                        gradient
+                    )
+                ) {
+
+                    gradient = 0;
+                }
+
+
+                parameter.m[i] =
+                    beta1 *
+                    parameter.m[i] +
+                    (1 - beta1) *
+                    gradient;
+
+
+                parameter.v[i] =
+                    beta2 *
+                    parameter.v[i] +
+                    (1 - beta2) *
+                    gradient *
+                    gradient;
+
+
+                const mHat =
+                    parameter.m[i] /
+                    Math.max(
+                        correction1,
+                        1e-12
+                    );
+
+
+                const vHat =
+                    parameter.v[i] /
+                    Math.max(
+                        correction2,
+                        1e-12
+                    );
+
+
+                /*
+                 * AdamW
+                 */
+
+                parameter.data[i] -=
+                    lr *
+                    (
+                        mHat /
+                        (
+                            Math.sqrt(
+                                vHat
+                            ) +
+                            1e-8
+                        )
+                    );
+
+
+                /*
+                 * Weight Decay
+                 */
+
+                parameter.data[i] -=
+                    lr *
+                    decay *
+                    parameter.data[i];
+            }
+        }
+    }
+
+
+    /* =====================================================
+       SEQUENCE LOSS
+       ===================================================== */
+
+    sequenceLoss(
+        tokens
+    ) {
+
+        if (
+            !Array.isArray(tokens) ||
+            tokens.length < 2
+        ) {
+
+            return 0;
+        }
+
+
+        const contextLength =
+            Math.min(
+                this.config.contextSize,
+                tokens.length - 1
+            );
+
+
+        const start =
+            Math.max(
+                0,
+                tokens.length -
+                contextLength -
+                1
+            );
+
+
+        let total = 0;
+        let count = 0;
+
+
+        for (
+            let position = start;
+            position <
+            tokens.length - 1;
+            position++
+        ) {
+
+            const contextStart =
+                Math.max(
+                    0,
+                    position -
+                    this.config.contextSize +
+                    1
+                );
+
+
+            const context =
+                tokens.slice(
+                    contextStart,
+                    position + 1
+                );
+
+
+            const target =
+                tokens[
+                    position + 1
+                ];
+
+
+            const hidden =
+                this.buildContextVector(
+                    context
+                );
+
+
+            const logits =
+                this.outputLogits(
+                    hidden
+                );
+
+
+            total +=
+                this.crossEntropy(
+                    logits,
+                    target
+                );
+
+            count++;
+        }
+
+
+        return count > 0
+            ? total / count
+            : 0;
+    }
+
+
+    /* =====================================================
+       TEXT GENERATION
+       ===================================================== */
+
+    generateTokens(
+        inputTokens,
+        options
+    ) {
+
+        options =
+            Object.assign(
+                {
+                    maxTokens: 120,
+                    temperature:
+                        this.config.temperature,
+                    topK:
+                        this.config.topK,
+                    topP:
+                        this.config.topP,
+                    repetitionPenalty:
+                        this.config.repetitionPenalty,
+                    greedy: false,
+                    stopTokens: []
+                },
+                options || {}
+            );
+
+
+        const tokens =
+            Array.from(
+                inputTokens || []
+            );
+
+
+        const generated = [];
+
+
+        for (
+            let step = 0;
+            step <
+            options.maxTokens;
+            step++
+        ) {
+
+            const result =
+                this.predictNext(
+                    tokens,
+                    options
+                );
+
+
+            const token =
+                result.token;
+
+
+            if (
+                options.stopTokens &&
+                options.stopTokens.includes(
+                    token
+                )
+            ) {
+
+                break;
+            }
+
+
+            tokens.push(
+                token
+            );
+
+            generated.push(
+                token
+            );
+
+
+            /*
+             * Kontext begrenzen.
+             */
+
+            if (
+                tokens.length >
+                this.config.contextSize
+            ) {
+
+                tokens.shift();
+            }
+        }
+
+
+        return {
+            tokens,
+            generated
+        };
+    }
+
+
+    /* =====================================================
+       TEXT → TEXT
+       ===================================================== */
+
+    generate(
+        text,
+        tokenizer,
+        options
+    ) {
+
+        if (
+            !tokenizer ||
+            typeof tokenizer.encode !==
+            "function" ||
+            typeof tokenizer.decode !==
+            "function"
+        ) {
+
+            throw new Error(
+                "Tokenizer mit encode() und decode() erforderlich."
+            );
+        }
+
+
+        const input =
+            tokenizer.encode(
+                String(
+                    text || ""
+                )
+            );
+
+
+        const result =
+            this.generateTokens(
+                input,
+                options
+            );
+
+
+        return tokenizer.decode(
+            result.tokens
+        );
+    }
+
+
+    /* =====================================================
+       CHAT
+       ===================================================== */
+
+    chat(
+        messages,
+        tokenizer,
+        options
+    ) {
+
+        let prompt = "";
+
+
+        for (
+            const message of
+            messages || []
+        ) {
+
+            const role =
+                message.role ||
+                "user";
+
+
+            prompt +=
+                `<|${role}|>\n`;
+
+            prompt +=
+                String(
+                    message.content ||
+                    ""
+                );
+
+            prompt +=
+                "\n<|end|>\n";
+        }
+
+
+        prompt +=
+            "<|assistant|>\n";
+
+
+        return this.generate(
+            prompt,
+            tokenizer,
+            options
+        );
+    }
+
+
+    /* =====================================================
+       SERIALISIERUNG
+       ===================================================== */
+
+    serialize() {
+
+        const result = {
+
+            version: 2,
+
+            config:
+                Object.assign(
+                    {},
+                    this.config
+                ),
+
+            trainingStep:
+                this.trainingStep,
+
+            parameters: {}
+        };
+
+
+        for (
+            const parameter of
+            this.parameters()
+        ) {
+
+            result.parameters[
+                parameter.name
+            ] =
+                Array.from(
+                    parameter.data
+                );
+        }
+
+
+        return result;
+    }
+
+
+    toJSON() {
+
+        return JSON.stringify(
+            this.serialize()
+        );
+    }
+
+
+    /* =====================================================
+       LADEN
+       ===================================================== */
+
+    load(
+        data
+    ) {
+
+        if (
+            typeof data ===
+            "string"
+        ) {
+
+            data =
+                JSON.parse(
+                    data
+                );
+        }
+
+
+        if (
+            !data ||
+            typeof data !==
+            "object"
+        ) {
+
+            throw new Error(
+                "Ungültige Modelldaten."
+            );
+        }
+
+
+        /*
+         * WICHTIG:
+         * Die gespeicherte Konfiguration
+         * muss vor dem Erstellen der Parameter
+         * passen.
+         */
+
+        if (
+            data.config
+        ) {
+
+            const saved =
+                data.config;
+
+
+            if (
+                Number.isInteger(
+                    saved.vocabSize
+                ) &&
+                saved.vocabSize ===
+                this.config.vocabSize
+            ) {
+
+                this.config =
+                    Object.assign(
+                        {},
+                        this.config,
+                        saved
+                    );
+            }
+        }
+
+
+        if (
+            Number.isFinite(
+                data.trainingStep
+            )
+        ) {
+
+            this.trainingStep =
+                data.trainingStep;
+        }
+
+
+        if (
+            !data.parameters
+        ) {
+
+            return this;
+        }
+
+
+        const parameters =
+            this.parameters();
+
+
+        const map =
+            new Map();
+
+
+        for (
+            const parameter of
+            parameters
+        ) {
+
+            map.set(
+                parameter.name,
+                parameter
+            );
+        }
+
+
+        for (
+            const name in
+            data.parameters
+        ) {
+
+            const parameter =
+                map.get(
+                    name
+                );
+
+
+            if (
+                !parameter
+            ) {
+                continue;
+            }
+
+
+            const source =
+                data.parameters[
+                    name
+                ];
+
+
+            if (
+                !Array.isArray(
+                    source
+                ) ||
+                source.length !==
+                parameter.data.length
+            ) {
+
+                continue;
+            }
+
+
+            for (
+                let i = 0;
+                i < source.length;
+                i++
+            ) {
+
+                const value =
+                    Number(
+                        source[i]
+                    );
+
+
+                parameter.data[i] =
+                    Number.isFinite(
+                        value
+                    )
+                        ? value
+                        : 0;
+            }
+        }
+
+
+        return this;
+    }
+
+
+    /* =====================================================
+       INFO
+       ===================================================== */
+
+    info() {
+
+        return {
+
+            parameters:
+                this.parameterCount(),
+
+            parametersMillions:
+                this.parameterCount() /
+                1000000,
+
+            vocabSize:
+                this.config.vocabSize,
+
+            contextSize:
+                this.config.contextSize,
+
+            embeddingSize:
+                this.config.embeddingSize,
+
+            trainingStep:
+                this.trainingStep
+        };
+    }
+}
+
+
+/* =========================================================
+   KLEINES MODELL
+   ========================================================= */
+
+class SmallLanguageModel
+    extends LanguageModel {
+
+    constructor(
+        config
+    ) {
+
+        super(
+            Object.assign(
+                {},
+                DEFAULT_CONFIG,
+                {
+                    contextSize: 16,
+                    embeddingSize: 32
+                },
+                config || {}
+            )
         );
     }
 }
 
 
-main();
+/* =========================================================
+   GROSSES MODELL
+   ========================================================= */
+
+class LargeLanguageModel
+    extends LanguageModel {
+
+    constructor(
+        config
+    ) {
+
+        super(
+            Object.assign(
+                {},
+                DEFAULT_CONFIG,
+                {
+                    contextSize: 64,
+                    embeddingSize: 64
+                },
+                config || {}
+            )
+        );
+    }
+}
+
+
+/* =========================================================
+   CHAT ENGINE
+   ========================================================= */
+
+class ChatEngine {
+
+    constructor(
+        model,
+        tokenizer
+    ) {
+
+        this.model =
+            model;
+
+        this.tokenizer =
+            tokenizer;
+
+        this.history = [];
+
+        this.systemPrompt =
+            "Du bist LUMORA, eine hilfreiche KI.";
+    }
+
+
+    clear() {
+
+        this.history = [];
+    }
+
+
+    setSystemPrompt(
+        text
+    ) {
+
+        this.systemPrompt =
+            String(
+                text || ""
+            );
+    }
+
+
+    ask(
+        userText,
+        options
+    ) {
+
+        let prompt =
+            `<|system|>\n` +
+            this.systemPrompt +
+            `\n<|end|>\n`;
+
+
+        for (
+            const message of
+            this.history
+        ) {
+
+            prompt +=
+                `<|${message.role}|>\n`;
+
+            prompt +=
+                String(
+                    message.content
+                );
+
+            prompt +=
+                "\n<|end|>\n";
+        }
+
+
+        prompt +=
+            "<|user|>\n";
+
+        prompt +=
+            String(
+                userText
+            );
+
+        prompt +=
+            "\n<|end|>\n";
+
+        prompt +=
+            "<|assistant|>\n";
+
+
+        const answer =
+            this.model.generate(
+                prompt,
+                this.tokenizer,
+                Object.assign(
+                    {
+                        maxTokens: 120,
+                        temperature: 0.8,
+                        topK: 20,
+                        topP: 0.9,
+                        repetitionPenalty: 1.08
+                    },
+                    options || {}
+                )
+            );
+
+
+        this.history.push({
+            role: "user",
+            content:
+                String(
+                    userText
+                )
+        });
+
+
+        this.history.push({
+            role: "assistant",
+            content:
+                String(
+                    answer
+                )
+        });
+
+
+        return answer;
+    }
+}
+
+
+/* =========================================================
+   EXPORT
+   ========================================================= */
+
+const exported = {
+
+    LanguageModel,
+
+    SmallLanguageModel,
+
+    LargeLanguageModel,
+
+    ChatEngine,
+
+    Parameter,
+
+    MODEL_CONFIG:
+        DEFAULT_CONFIG
+};
+
+
+if (
+    typeof module !==
+    "undefined" &&
+    module.exports
+) {
+
+    module.exports =
+        exported;
+}
+
+
+if (
+    typeof window !==
+    "undefined"
+) {
+
+    window.LanguageModel =
+        LanguageModel;
+
+    window.SmallLanguageModel =
+        SmallLanguageModel;
+
+    window.LargeLanguageModel =
+        LargeLanguageModel;
+
+    window.ChatEngine =
+        ChatEngine;
+
+    window.Parameter =
+        Parameter;
+
+    window.MODEL_CONFIG =
+        DEFAULT_CONFIG;
+}
