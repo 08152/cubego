@@ -14,325 +14,338 @@ html,body{
     margin:0;
     width:100%;
     height:100%;
-    overflow:hidden;
     font-family:Arial,Helvetica,sans-serif;
-    background:#0b0b0f;
+    background:#080611;
     color:#fff;
 }
 
 body{
     display:flex;
+    overflow:hidden;
 }
 
 #app{
     width:100%;
     height:100%;
     display:flex;
+}
+
+.sidebar{
+    width:280px;
+    background:#0d0a18;
+    border-right:1px solid #28203d;
+    display:flex;
     flex-direction:column;
+    padding:18px;
+    gap:14px;
 }
 
-/* HEADER */
-
-#header{
-    height:64px;
-    flex-shrink:0;
-    display:flex;
-    align-items:center;
-    padding:0 22px;
-    border-bottom:1px solid #24242c;
-    background:#101015;
-}
-
-#logo{
-    font-size:21px;
+.logo{
+    font-size:28px;
     font-weight:800;
-    letter-spacing:1px;
+    letter-spacing:2px;
+    padding:8px 4px 18px;
 }
 
-#status{
-    margin-left:auto;
-    display:flex;
-    align-items:center;
-    gap:8px;
+.logo span{
+    color:#9d6cff;
+}
+
+button{
+    border:0;
+    border-radius:12px;
+    padding:13px 15px;
+    color:white;
+    background:#21183a;
+    cursor:pointer;
+    font-size:14px;
+    transition:.15s;
+}
+
+button:hover{
+    background:#302052;
+    transform:translateY(-1px);
+}
+
+.train{
+    background:linear-gradient(135deg,#7c3cff,#4c7dff);
+    font-weight:700;
+    font-size:15px;
+}
+
+.train:hover{
+    background:linear-gradient(135deg,#9158ff,#638fff);
+}
+
+.train:disabled{
+    opacity:.55;
+    cursor:not-allowed;
+    transform:none;
+}
+
+.status{
+    margin-top:auto;
+    border:1px solid #28203d;
+    background:#110d1e;
+    border-radius:14px;
+    padding:14px;
     font-size:13px;
-    color:#9999a5;
 }
 
-#statusDot{
+.statusTitle{
+    color:#aaa0c4;
+    margin-bottom:7px;
+}
+
+.dot{
+    display:inline-block;
     width:9px;
     height:9px;
     border-radius:50%;
     background:#777;
+    margin-right:7px;
 }
 
-#statusDot.online{
-    background:#38d878;
-    box-shadow:0 0 10px #38d878;
+.dot.ok{
+    background:#43e68b;
+    box-shadow:0 0 10px #43e68b;
 }
 
-#statusDot.error{
-    background:#ff4d5d;
+.dot.busy{
+    background:#ffbd45;
+    box-shadow:0 0 10px #ffbd45;
 }
 
-/* MAIN */
-
-#main{
-    flex:1;
-    min-height:0;
-    display:flex;
+.dot.error{
+    background:#ff4d6d;
+    box-shadow:0 0 10px #ff4d6d;
 }
 
-/* SIDEBAR */
-
-#sidebar{
-    width:260px;
-    flex-shrink:0;
-    border-right:1px solid #24242c;
-    background:#0f0f14;
-    display:flex;
-    flex-direction:column;
-    padding:14px;
-}
-
-#newChat{
-    border:1px solid #34343e;
-    background:#191920;
-    color:#fff;
-    border-radius:10px;
-    padding:12px;
-    cursor:pointer;
-    font-size:14px;
-    text-align:left;
-}
-
-#newChat:hover{
-    background:#22222b;
-}
-
-#sideInfo{
-    margin-top:auto;
-    border-top:1px solid #24242c;
-    padding-top:14px;
-    color:#777782;
-    font-size:12px;
-    line-height:1.6;
-}
-
-#modelStatus{
-    color:#aaaab5;
-}
-
-/* CHAT */
-
-#chatArea{
+.main{
     flex:1;
     min-width:0;
     display:flex;
     flex-direction:column;
+}
+
+.header{
+    height:68px;
+    border-bottom:1px solid #28203d;
+    display:flex;
+    align-items:center;
+    padding:0 24px;
+    background:#0a0712;
+}
+
+.headerTitle{
+    font-size:19px;
+    font-weight:700;
+}
+
+.headerInfo{
+    margin-left:auto;
+    color:#8f86a5;
+    font-size:13px;
 }
 
 #messages{
     flex:1;
     overflow-y:auto;
-    padding:28px 18px 120px;
+    padding:30px 8%;
 }
 
 .message{
-    width:min(900px,100%);
-    margin:0 auto 25px;
+    max-width:900px;
+    margin:0 auto 22px;
     display:flex;
     gap:14px;
 }
 
 .avatar{
-    width:34px;
-    height:34px;
-    flex-shrink:0;
-    border-radius:9px;
+    width:38px;
+    height:38px;
+    min-width:38px;
+    border-radius:12px;
     display:flex;
-    justify-content:center;
     align-items:center;
-    font-size:13px;
+    justify-content:center;
+    background:#201635;
     font-weight:bold;
-    background:#24242d;
 }
 
-.message.user .avatar{
-    background:#343444;
-}
-
-.message.assistant .avatar{
-    background:#665cff;
+.user .avatar{
+    background:#302052;
 }
 
 .content{
-    min-width:0;
     flex:1;
     line-height:1.65;
-    font-size:15px;
     white-space:pre-wrap;
     overflow-wrap:anywhere;
 }
 
-.empty{
-    width:min(900px,100%);
-    margin:10vh auto 0;
+.user .content{
+    background:#171122;
+    border:1px solid #28203d;
+    padding:13px 16px;
+    border-radius:15px;
+}
+
+.assistant .content{
+    padding-top:5px;
+}
+
+.welcome{
+    height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
     text-align:center;
-    color:#8c8c98;
 }
 
-.empty h1{
-    color:#fff;
-    font-size:34px;
-    margin-bottom:10px;
+.welcomeBox{
+    max-width:650px;
 }
 
-.empty p{
-    margin:0;
+.welcomeBox h1{
+    font-size:50px;
+    margin:0 0 10px;
+    background:linear-gradient(90deg,#fff,#a77cff);
+    -webkit-background-clip:text;
+    color:transparent;
 }
 
-/* INPUT */
-
-#inputArea{
-    position:relative;
-    padding:14px 18px 18px;
-    background:linear-gradient(
-        to top,
-        #0b0b0f 70%,
-        transparent
-    );
+.welcomeBox p{
+    color:#8f86a5;
+    font-size:16px;
 }
 
-#composer{
-    width:min(900px,100%);
+.composer{
+    padding:16px 8% 22px;
+    border-top:1px solid #28203d;
+    background:#0a0712;
+}
+
+.inputBox{
+    max-width:900px;
     margin:auto;
-    position:relative;
+    display:flex;
+    align-items:flex-end;
+    gap:10px;
+    background:#151020;
+    border:1px solid #302644;
+    border-radius:18px;
+    padding:10px;
 }
 
-#prompt{
-    width:100%;
-    min-height:58px;
+textarea{
+    flex:1;
+    min-height:46px;
     max-height:180px;
     resize:none;
-    border:1px solid #34343e;
-    outline:none;
-    border-radius:16px;
-    background:#17171e;
-    color:#fff;
-    padding:17px 58px 17px 17px;
-    font:15px Arial,sans-serif;
-    line-height:1.5;
-}
-
-#prompt:focus{
-    border-color:#665cff;
-    box-shadow:0 0 0 2px rgba(102,92,255,.12);
-}
-
-#send{
-    position:absolute;
-    right:9px;
-    bottom:9px;
-    width:40px;
-    height:40px;
     border:0;
-    border-radius:11px;
-    background:#665cff;
-    color:#fff;
-    cursor:pointer;
-    font-size:17px;
+    outline:0;
+    background:transparent;
+    color:white;
+    font:inherit;
+    padding:10px;
 }
 
-#send:hover{
-    background:#776eff;
+textarea::placeholder{
+    color:#716981;
 }
 
-#send:disabled{
-    opacity:.45;
-    cursor:not-allowed;
+.send{
+    width:46px;
+    height:46px;
+    padding:0;
+    border-radius:13px;
+    background:#7c3cff;
+    font-size:19px;
 }
 
-#hint{
+.send:hover{
+    background:#925cff;
+}
+
+.small{
     text-align:center;
-    color:#656570;
+    color:#5f5870;
     font-size:11px;
-    margin-top:8px;
+    margin-top:9px;
 }
 
-/* LOADING */
-
-.typing{
-    color:#92929d;
+.progressBox{
+    display:none;
+    margin-top:12px;
+    max-width:900px;
+    margin-left:auto;
+    margin-right:auto;
 }
 
-.dot{
-    display:inline-block;
-    animation:blink 1.2s infinite;
+.progressBox.show{
+    display:block;
 }
 
-.dot:nth-child(2){
-    animation-delay:.15s;
+.progressBar{
+    height:8px;
+    border-radius:99px;
+    background:#201a2d;
+    overflow:hidden;
 }
 
-.dot:nth-child(3){
-    animation-delay:.3s;
+.progressFill{
+    width:0%;
+    height:100%;
+    background:linear-gradient(90deg,#7c3cff,#55a8ff);
+    transition:width .3s;
 }
 
-@keyframes blink{
-    0%,80%,100%{
-        opacity:.25;
-    }
-    40%{
-        opacity:1;
-    }
+.progressText{
+    margin-top:7px;
+    font-size:12px;
+    color:#8f86a5;
 }
 
-/* MOBILE */
-
-@media(max-width:700px){
-
-    #sidebar{
-        display:none;
-    }
-
-    #header{
-        height:56px;
-        padding:0 15px;
+@media(max-width:750px){
+    .sidebar{
+        width:220px;
     }
 
     #messages{
-        padding:20px 12px 110px;
+        padding:20px 4%;
     }
 
-    .message{
-        gap:10px;
+    .composer{
+        padding:12px 4% 16px;
     }
 
-    .avatar{
-        width:30px;
-        height:30px;
-        border-radius:8px;
-        font-size:11px;
+    .welcomeBox h1{
+        font-size:38px;
     }
 
-    .content{
-        font-size:14px;
+    .headerInfo{
+        display:none;
+    }
+}
+
+@media(max-width:560px){
+    .sidebar{
+        position:absolute;
+        left:0;
+        top:0;
+        bottom:0;
+        z-index:10;
+        transform:translateX(-100%);
+        transition:.2s;
     }
 
-    #inputArea{
-        padding:10px 10px 13px;
+    .sidebar.open{
+        transform:translateX(0);
     }
 
-    #prompt{
-        border-radius:14px;
-    }
-
-    .empty{
-        margin-top:18vh;
-    }
-
-    .empty h1{
-        font-size:29px;
+    .header{
+        padding-left:16px;
     }
 }
 </style>
@@ -342,156 +355,183 @@ body{
 
 <div id="app">
 
-    <header id="header">
-        <div id="logo">LUMORA</div>
+    <aside class="sidebar">
 
-        <div id="status">
-            <span id="statusDot"></span>
-            <span id="statusText">Verbinde...</span>
+        <div class="logo">
+            LU<span>MORA</span>
         </div>
-    </header>
 
-    <main id="main">
+        <button class="train" id="trainButton">
+            🧠 Training starten
+        </button>
 
-        <aside id="sidebar">
+        <button id="statusButton">
+            📊 Status prüfen
+        </button>
 
-            <button id="newChat">
-                ＋ Neuer Chat
-            </button>
+        <button id="clearButton">
+            🗑️ Chat löschen
+        </button>
 
-            <div id="sideInfo">
-                <div>Lokale KI</div>
-                <div id="modelStatus">Modell wird geprüft...</div>
+        <div class="status">
+            <div class="statusTitle">System</div>
+
+            <div>
+                <span class="dot" id="systemDot"></span>
+                <span id="systemStatus">Verbinde...</span>
             </div>
 
-        </aside>
+            <div style="margin-top:8px;color:#6f687e">
+                Modell:
+                <span id="modelStatus">unbekannt</span>
+            </div>
 
-        <section id="chatArea">
+            <div style="margin-top:4px;color:#6f687e">
+                Tokenizer:
+                <span id="tokenizerStatus">unbekannt</span>
+            </div>
+        </div>
 
-            <div id="messages">
+    </aside>
 
-                <div class="empty" id="empty">
+    <main class="main">
 
+        <header class="header">
+            <div class="headerTitle">
+                LUMORA
+            </div>
+
+            <div class="headerInfo">
+                Eigenes Sprachmodell
+            </div>
+        </header>
+
+        <section id="messages">
+
+            <div class="welcome" id="welcome">
+
+                <div class="welcomeBox">
                     <h1>LUMORA</h1>
 
                     <p>
-                        Was möchtest du wissen?
+                        Dein eigenes trainierbares Sprachmodell.
+                        Starte zuerst das Training mit deinen
+                        Daten aus <b>DATEN/training.json</b>.
                     </p>
-
-                </div>
-
-            </div>
-
-            <div id="inputArea">
-
-                <div id="composer">
-
-                    <textarea
-                        id="prompt"
-                        placeholder="Nachricht an LUMORA..."
-                        autocomplete="off"
-                        spellcheck="true"
-                    ></textarea>
-
-                    <button id="send" title="Senden">
-                        ↑
-                    </button>
-
-                </div>
-
-                <div id="hint">
-                    LUMORA läuft über deinen lokalen Server.
                 </div>
 
             </div>
 
         </section>
 
+        <div class="composer">
+
+            <div class="progressBox" id="progressBox">
+
+                <div class="progressBar">
+                    <div
+                        class="progressFill"
+                        id="progressFill">
+                    </div>
+                </div>
+
+                <div
+                    class="progressText"
+                    id="progressText">
+                    Training wird vorbereitet...
+                </div>
+
+            </div>
+
+            <div class="inputBox">
+
+                <textarea
+                    id="prompt"
+                    placeholder="Schreibe eine Nachricht..."
+                    rows="1"></textarea>
+
+                <button
+                    class="send"
+                    id="sendButton">
+                    ➤
+                </button>
+
+            </div>
+
+            <div class="small">
+                LUMORA · eigenes Modell · keine externe KI-API
+            </div>
+
+        </div>
+
     </main>
 
 </div>
 
 <script>
+const API = "";
 
-"use strict";
-
-const messages = document.getElementById("messages");
-const empty = document.getElementById("empty");
-const promptInput = document.getElementById("prompt");
-const sendButton = document.getElementById("send");
-
-const statusDot = document.getElementById("statusDot");
-const statusText = document.getElementById("statusText");
-const modelStatus = document.getElementById("modelStatus");
-const newChat = document.getElementById("newChat");
-
-let history = [];
+let messages = [];
 let generating = false;
+let training = false;
+
+const messagesElement =
+    document.getElementById("messages");
+
+const welcome =
+    document.getElementById("welcome");
+
+const promptInput =
+    document.getElementById("prompt");
+
+const sendButton =
+    document.getElementById("sendButton");
+
+const trainButton =
+    document.getElementById("trainButton");
+
+const statusButton =
+    document.getElementById("statusButton");
+
+const clearButton =
+    document.getElementById("clearButton");
+
+const systemDot =
+    document.getElementById("systemDot");
+
+const systemStatus =
+    document.getElementById("systemStatus");
+
+const modelStatus =
+    document.getElementById("modelStatus");
+
+const tokenizerStatus =
+    document.getElementById("tokenizerStatus");
+
+const progressBox =
+    document.getElementById("progressBox");
+
+const progressFill =
+    document.getElementById("progressFill");
+
+const progressText =
+    document.getElementById("progressText");
 
 
-// ============================================================
-// STATUS
-// ============================================================
+function addMessage(role, text){
 
-async function checkServer(){
-
-    try{
-
-        const response = await fetch("/api/status",{
-            cache:"no-store"
-        });
-
-        if(!response.ok){
-            throw new Error("Server offline");
-        }
-
-        const data = await response.json();
-
-        statusDot.className = "online";
-        statusText.textContent = "Online";
-
-        if(data.modelExists){
-
-            modelStatus.textContent =
-                "Modell: bereit";
-
-        }else{
-
-            modelStatus.textContent =
-                "Modell: noch nicht trainiert";
-
-        }
-
-    }catch(error){
-
-        statusDot.className = "error";
-        statusText.textContent = "Offline";
-
-        modelStatus.textContent =
-            "Server nicht erreichbar";
-
+    if(welcome){
+        welcome.style.display = "none";
     }
 
-}
+    const wrapper =
+        document.createElement("div");
 
+    wrapper.className =
+        "message " + role;
 
-// ============================================================
-// MESSAGE
-// ============================================================
-
-function addMessage(role,text){
-
-    empty.style.display = "none";
-
-    const message = document.createElement("div");
-
-    message.className =
-        "message " +
-        (role === "user"
-            ? "user"
-            : "assistant");
-
-    const avatar = document.createElement("div");
+    const avatar =
+        document.createElement("div");
 
     avatar.className = "avatar";
 
@@ -500,208 +540,635 @@ function addMessage(role,text){
             ? "DU"
             : "L";
 
-    const content = document.createElement("div");
+    const content =
+        document.createElement("div");
 
     content.className = "content";
 
     content.textContent = text;
 
-    message.appendChild(avatar);
-    message.appendChild(content);
+    wrapper.appendChild(avatar);
+    wrapper.appendChild(content);
 
-    messages.appendChild(message);
+    messagesElement.appendChild(wrapper);
 
-    messages.scrollTop =
-        messages.scrollHeight;
+    messagesElement.scrollTop =
+        messagesElement.scrollHeight;
 
-    return {
-        message,
-        content
-    };
+    return content;
 }
 
 
-// ============================================================
-// TYPING
-// ============================================================
+function setSystemState(state, text){
 
-function addTyping(){
+    systemStatus.textContent = text;
 
-    empty.style.display = "none";
-
-    const message = document.createElement("div");
-
-    message.className =
-        "message assistant";
-
-    const avatar = document.createElement("div");
-
-    avatar.className = "avatar";
-    avatar.textContent = "L";
-
-    const content = document.createElement("div");
-
-    content.className =
-        "content typing";
-
-    content.innerHTML =
-        'LUMORA denkt <span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>';
-
-    message.appendChild(avatar);
-    message.appendChild(content);
-
-    messages.appendChild(message);
-
-    messages.scrollTop =
-        messages.scrollHeight;
-
-    return {
-        message,
-        content
-    };
+    systemDot.className =
+        "dot " + state;
 }
 
 
-// ============================================================
-// GENERATE
-// ============================================================
-
-async function generate(){
-
-    if(generating) return;
-
-    const text =
-        promptInput.value.trim();
-
-    if(!text) return;
-
-    generating = true;
-
-    sendButton.disabled = true;
-    promptInput.disabled = true;
-
-    addMessage("user",text);
-
-    history.push({
-        role:"user",
-        content:text
-    });
-
-    promptInput.value = "";
-
-    const typing = addTyping();
+async function checkStatus(){
 
     try{
 
-        const response = await fetch(
-            "/api/generate",
-            {
-                method:"POST",
+        const response =
+            await fetch(
+                API + "/api/status",
+                {
+                    cache:"no-store"
+                }
+            );
 
-                headers:{
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body:JSON.stringify({
-
-                    prompt:text,
-
-                    history:history.slice(
-                        -20
-                    ),
-
-                    systemPrompt:
-                        "Du bist LUMORA, eine lokale KI. Antworte hilfreich, klar und auf Deutsch.",
-
-                    maxTokens:160,
-
-                    temperature:.82,
-
-                    topK:40,
-
-                    topP:.92,
-
-                    repetitionPenalty:1.08
-
-                })
-            }
-        );
+        if(!response.ok){
+            throw new Error(
+                "HTTP " + response.status
+            );
+        }
 
         const data =
             await response.json();
 
-        typing.message.remove();
+        const model =
+            data.model === true ||
+            data.modelExists === true;
 
-        if(!response.ok || !data.ok){
+        const tokenizer =
+            data.tokenizer === true ||
+            data.tokenizerExists === true;
 
-            const errorText =
+        modelStatus.textContent =
+            model ? "vorhanden" : "nicht vorhanden";
+
+        tokenizerStatus.textContent =
+            tokenizer
+                ? "vorhanden"
+                : "nicht vorhanden";
+
+        if(model && tokenizer){
+
+            setSystemState(
+                "ok",
+                "Bereit"
+            );
+
+        }else{
+
+            setSystemState(
+                "",
+                "Training erforderlich"
+            );
+        }
+
+        return data;
+
+    }catch(error){
+
+        setSystemState(
+            "error",
+            "Server nicht erreichbar"
+        );
+
+        console.error(error);
+    }
+}
+
+
+async function startTraining(){
+
+    if(training){
+        return;
+    }
+
+    training = true;
+
+    trainButton.disabled = true;
+
+    progressBox.classList.add("show");
+
+    progressFill.style.width = "2%";
+
+    progressText.textContent =
+        "Training wird gestartet...";
+
+    setSystemState(
+        "busy",
+        "Training läuft"
+    );
+
+    try{
+
+        const response =
+            await fetch(
+                API + "/api/train/start",
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:JSON.stringify({
+                        epochs:10,
+                        sequenceLength:256,
+                        learningRate:0.0003
+                    })
+                }
+            );
+
+        const data =
+            await response.json()
+            .catch(() => ({}));
+
+        if(!response.ok){
+
+            throw new Error(
                 data.error ||
-                "LUMORA konnte keine Antwort erzeugen.";
+                "HTTP " + response.status
+            );
+        }
 
-            addMessage(
-                "assistant",
-                "Fehler: " + errorText
+        progressText.textContent =
+            "Training gestartet...";
+
+        monitorTraining();
+
+    }catch(error){
+
+        console.error(error);
+
+        progressText.textContent =
+            "Fehler: " + error.message;
+
+        setSystemState(
+            "error",
+            "Training fehlgeschlagen"
+        );
+
+        training = false;
+
+        trainButton.disabled = false;
+    }
+}
+
+
+async function monitorTraining(){
+
+    const started =
+        Date.now();
+
+    const timeout =
+        1000 * 60 * 60;
+
+    async function loop(){
+
+        if(
+            Date.now() - started >
+            timeout
+        ){
+
+            progressText.textContent =
+                "Training-Zeitüberschreitung.";
+
+            training = false;
+            trainButton.disabled = false;
+
+            setSystemState(
+                "error",
+                "Training gestoppt"
             );
 
             return;
         }
 
-        const answer =
-            typeof data.answer === "string"
-                ? data.answer.trim()
-                : "";
+        try{
+
+            const response =
+                await fetch(
+                    API +
+                    "/api/training-state",
+                    {
+                        cache:"no-store"
+                    }
+                );
+
+            if(response.ok){
+
+                const data =
+                    await response.json();
+
+                updateTrainingUI(data);
+            }
+
+        }catch(error){
+
+            console.error(
+                "Training-Status:",
+                error
+            );
+        }
+
+        try{
+
+            const status =
+                await fetch(
+                    API +
+                    "/api/status",
+                    {
+                        cache:"no-store"
+                    }
+                );
+
+            if(status.ok){
+
+                const data =
+                    await status.json();
+
+                const model =
+                    data.model === true ||
+                    data.modelExists === true;
+
+                const tokenizer =
+                    data.tokenizer === true ||
+                    data.tokenizerExists === true;
+
+                modelStatus.textContent =
+                    model
+                        ? "vorhanden"
+                        : "nicht vorhanden";
+
+                tokenizerStatus.textContent =
+                    tokenizer
+                        ? "vorhanden"
+                        : "nicht vorhanden";
+
+                if(model && tokenizer){
+
+                    progressFill.style.width =
+                        "100%";
+
+                    progressText.textContent =
+                        "✅ Training abgeschlossen.";
+
+                    setSystemState(
+                        "ok",
+                        "Bereit"
+                    );
+
+                    training = false;
+
+                    trainButton.disabled =
+                        false;
+
+                    return;
+                }
+            }
+
+        }catch(error){
+
+            console.error(error);
+        }
+
+        setTimeout(
+            loop,
+            2000
+        );
+    }
+
+    loop();
+}
+
+
+function updateTrainingUI(data){
+
+    if(!data){
+        return;
+    }
+
+    const epoch =
+        Number(
+            data.epoch ||
+            data.currentEpoch ||
+            0
+        );
+
+    const totalEpochs =
+        Number(
+            data.totalEpochs ||
+            data.epochs ||
+            10
+        );
+
+    let percent =
+        totalEpochs > 0
+            ? (epoch / totalEpochs) * 100
+            : 0;
+
+    if(
+        data.progress !== undefined
+    ){
+
+        const p =
+            Number(data.progress);
+
+        if(Number.isFinite(p)){
+            percent =
+                p <= 1
+                    ? p * 100
+                    : p;
+        }
+    }
+
+    percent =
+        Math.max(
+            2,
+            Math.min(
+                99,
+                percent
+            )
+        );
+
+    progressFill.style.width =
+        percent + "%";
+
+    let text =
+        data.message ||
+        data.phase ||
+        "Training läuft...";
+
+    if(epoch){
+
+        text +=
+            " · Epoche " +
+            epoch +
+            "/" +
+            totalEpochs;
+    }
+
+    if(
+        data.loss !== undefined &&
+        data.loss !== null
+    ){
+
+        text +=
+            " · Loss: " +
+            Number(data.loss).toFixed(4);
+    }
+
+    progressText.textContent =
+        text;
+}
+
+
+async function sendMessage(){
+
+    if(generating){
+        return;
+    }
+
+    const prompt =
+        promptInput.value.trim();
+
+    if(!prompt){
+        return;
+    }
+
+    addMessage(
+        "user",
+        prompt
+    );
+
+    messages.push({
+        role:"user",
+        content:prompt
+    });
+
+    promptInput.value = "";
+
+    promptInput.style.height =
+        "46px";
+
+    generating = true;
+
+    sendButton.disabled =
+        true;
+
+    const answerElement =
+        addMessage(
+            "assistant",
+            "..."
+        );
+
+    try{
+
+        const response =
+            await fetch(
+                API + "/api/generate",
+                {
+                    method:"POST",
+
+                    headers:{
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body:JSON.stringify({
+
+                        prompt,
+
+                        history:
+                            messages.slice(
+                                -12,
+                                -1
+                            ),
+
+                        maxTokens:160,
+
+                        temperature:0.82,
+
+                        topK:40,
+
+                        topP:0.92,
+
+                        repetitionPenalty:1.08
+                    })
+                }
+            );
+
+        const data =
+            await response.json()
+            .catch(() => ({}));
+
+        if(!response.ok){
+
+            throw new Error(
+                data.error ||
+                data.message ||
+                "HTTP " +
+                response.status
+            );
+        }
+
+        let answer =
+            data.answer ||
+            data.text ||
+            "";
+
+        /*
+         * Manche server.js-Versionen
+         * starten den Worker und geben
+         * nicht sofort die Antwort zurück.
+         */
+        if(
+            !answer &&
+            (
+                data.started ||
+                data.running ||
+                data.status === "started"
+            )
+        ){
+
+            answer =
+                await waitForGeneration();
+        }
 
         if(!answer){
 
-            addMessage(
-                "assistant",
-                "LUMORA hat keine Antwort erzeugt."
-            );
-
-            return;
+            answer =
+                "LUMORA hat keine Antwort erzeugt.";
         }
 
-        addMessage(
-            "assistant",
-            answer
-        );
+        answerElement.textContent =
+            answer;
 
-        history.push({
+        messages.push({
             role:"assistant",
             content:answer
         });
 
     }catch(error){
 
-        typing.message.remove();
+        console.error(error);
 
-        addMessage(
-            "assistant",
-            "Verbindungsfehler: " +
-            error.message
-        );
-
-        statusDot.className = "error";
-        statusText.textContent = "Fehler";
-
-    }finally{
-
-        generating = false;
-
-        sendButton.disabled = false;
-        promptInput.disabled = false;
-
-        promptInput.focus();
-
-        checkServer();
+        answerElement.textContent =
+            "❌ Fehler: " +
+            error.message;
     }
+
+    generating = false;
+
+    sendButton.disabled =
+        false;
+
+    messagesElement.scrollTop =
+        messagesElement.scrollHeight;
 }
 
 
-// ============================================================
-// ENTER
-// ============================================================
+async function waitForGeneration(){
+
+    for(let i=0;i<300;i++){
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    500
+                )
+        );
+
+        try{
+
+            const response =
+                await fetch(
+                    API +
+                    "/api/generate/status",
+                    {
+                        cache:"no-store"
+                    }
+                );
+
+            if(!response.ok){
+                continue;
+            }
+
+            const data =
+                await response.json();
+
+            if(
+                data.answer
+            ){
+                return data.answer;
+            }
+
+            if(
+                data.text
+            ){
+                return data.text;
+            }
+
+            if(
+                data.error
+            ){
+                throw new Error(
+                    data.error
+                );
+            }
+
+        }catch(error){
+
+            if(
+                error.message &&
+                !error.message.includes(
+                    "Failed to fetch"
+                )
+            ){
+                throw error;
+            }
+        }
+    }
+
+    throw new Error(
+        "Keine Antwort innerhalb des Zeitlimits."
+    );
+}
+
+
+clearButton.addEventListener(
+    "click",
+    () => {
+
+        messages = [];
+
+        messagesElement.innerHTML = "";
+
+        messagesElement.appendChild(
+            welcome
+        );
+
+        welcome.style.display =
+            "flex";
+    }
+);
+
+
+statusButton.addEventListener(
+    "click",
+    checkStatus
+);
+
+
+trainButton.addEventListener(
+    "click",
+    startTraining
+);
+
+
+sendButton.addEventListener(
+    "click",
+    sendMessage
+);
+
 
 promptInput.addEventListener(
     "keydown",
@@ -714,80 +1181,41 @@ promptInput.addEventListener(
 
             event.preventDefault();
 
-            generate();
+            sendMessage();
         }
-
     }
 );
 
-
-// ============================================================
-// BUTTON
-// ============================================================
-
-sendButton.addEventListener(
-    "click",
-    generate
-);
-
-
-// ============================================================
-// NEW CHAT
-// ============================================================
-
-newChat.addEventListener(
-    "click",
-    () => {
-
-        history = [];
-
-        messages.innerHTML = "";
-
-        messages.appendChild(empty);
-
-        empty.style.display = "block";
-
-        promptInput.value = "";
-
-        promptInput.focus();
-    }
-);
-
-
-// ============================================================
-// AUTO RESIZE
-// ============================================================
 
 promptInput.addEventListener(
     "input",
     () => {
 
         promptInput.style.height =
-            "auto";
+            "46px";
 
         promptInput.style.height =
             Math.min(
-                promptInput.scrollHeight,
-                180
+                180,
+                promptInput.scrollHeight
             ) + "px";
-
     }
 );
 
 
-// ============================================================
-// START
-// ============================================================
+checkStatus();
 
-checkServer();
 
 setInterval(
-    checkServer,
-    5000
+    () => {
+
+        if(!training){
+            checkStatus();
+        }
+
+    },
+    10000
 );
-
-promptInput.focus();
-
 </script>
 
 </body>
