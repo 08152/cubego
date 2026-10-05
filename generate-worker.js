@@ -1,85 +1,157 @@
 "use strict";
 
+/*
+================================================================
+  generate-worker.js
+  LUMORA
+  - lädt GELERNT/model.json
+  - lädt GELERNT/tokenizer.json
+  - erzeugt echte Textantworten
+  - sendet beim Stream TEXT statt Token-IDs
+  - erkennt Spezialtokens zuverlässig
+  - kompatibel mit model.js + tokenizer.js
+================================================================
+*/
+
 const fs = require("fs");
 const path = require("path");
-const { parentPort, workerData } = require("worker_threads");
+const {
+    parentPort,
+    workerData
+} = require("worker_threads");
 
-const ROOT = workerData.root || __dirname;
-const GELERNT = workerData.gelernt || path.join(ROOT, "GELERNT");
 
-const MODEL_FILE = path.join(GELERNT, "model.json");
-const TOKENIZER_FILE = path.join(GELERNT, "tokenizer.json");
-const CONFIG_FILE = path.join(GELERNT, "config.json");
+/* =========================================================
+   PFADE
+   ========================================================= */
+
+const ROOT =
+    workerData.root || __dirname;
+
+const GELERNT =
+    workerData.gelernt ||
+    path.join(
+        ROOT,
+        "GELERNT"
+    );
+
+const MODEL_FILE =
+    path.join(
+        GELERNT,
+        "model.json"
+    );
+
+const TOKENIZER_FILE =
+    path.join(
+        GELERNT,
+        "tokenizer.json"
+    );
+
+const CONFIG_FILE =
+    path.join(
+        GELERNT,
+        "config.json"
+    );
+
+
+/* =========================================================
+   STOP
+   ========================================================= */
 
 let stopped = false;
 
 if (parentPort) {
-    parentPort.on("message", message => {
-        if (
-            message &&
-            (
-                message.type === "stop" ||
-                message.action === "stop"
-            )
-        ) {
-            stopped = true;
+    parentPort.on(
+        "message",
+        message => {
+            if (
+                message &&
+                (
+                    message.type === "stop" ||
+                    message.action === "stop"
+                )
+            ) {
+                stopped = true;
+            }
         }
+    );
+}
+
+
+/* =========================================================
+   KOMMUNIKATION
+   ========================================================= */
+
+function send(
+    type,
+    data = {}
+) {
+    if (!parentPort) {
+        return;
+    }
+
+    parentPort.postMessage({
+        type,
+        ...data
     });
 }
 
-/* =========================================================
-   HILFSFUNKTIONEN
-   ========================================================= */
 
-function send(type, data = {}) {
-    if (parentPort) {
-        parentPort.postMessage({
-            type,
-            ...data
-        });
-    }
-}
+/* =========================================================
+   JSON
+   ========================================================= */
 
 function readJSON(file) {
     return JSON.parse(
-        fs.readFileSync(file, "utf8")
+        fs.readFileSync(
+            file,
+            "utf8"
+        )
     );
 }
 
-function sleep(ms) {
-    const buffer = new SharedArrayBuffer(4);
-    const array = new Int32Array(buffer);
 
-    Atomics.wait(
-        array,
-        0,
-        0,
-        ms
-    );
+/* =========================================================
+   DATEI PRÜFEN
+   ========================================================= */
+
+function requireFile(
+    file,
+    message
+) {
+    if (
+        !fs.existsSync(file)
+    ) {
+        throw new Error(
+            message
+        );
+    }
 }
+
 
 /* =========================================================
    TOKENIZER
    ========================================================= */
 
 function loadTokenizerModule() {
-    const file = path.join(
-        ROOT,
-        "tokenizer.js"
-    );
 
-    if (!fs.existsSync(file)) {
-        throw new Error(
-            "tokenizer.js wurde nicht gefunden: " +
-            file
+    const file =
+        path.join(
+            ROOT,
+            "tokenizer.js"
         );
-    }
+
+    requireFile(
+        file,
+        "tokenizer.js wurde nicht gefunden."
+    );
 
     delete require.cache[
         require.resolve(file)
     ];
 
-    const loaded = require(file);
+    const loaded =
+        require(file);
 
     if (!loaded) {
         throw new Error(
@@ -90,7 +162,9 @@ function loadTokenizerModule() {
     return loaded;
 }
 
-function getTokenizerFactory() {
+
+function createTokenizer() {
+
     const loaded =
         loadTokenizerModule();
 
@@ -99,113 +173,100 @@ function getTokenizerFactory() {
         loaded.default ||
         loaded;
 
-    /*
-     * Aktuelle LUMORA-Tokenizer-Version
-     */
-
     if (
         AdvancedTokenizer &&
         typeof AdvancedTokenizer.create ===
-        "function"
+            "function"
     ) {
-        return AdvancedTokenizer;
+        return AdvancedTokenizer.create();
     }
-
-    /*
-     * Fallback für Klassenexport
-     */
 
     if (
         typeof AdvancedTokenizer ===
-        "function"
+            "function"
     ) {
-        return {
-            create() {
-                return new AdvancedTokenizer();
-            }
-        };
+        return new AdvancedTokenizer();
     }
 
     throw new Error(
-        "AdvancedTokenizer konnte nicht geladen werden. " +
-        "Erwartet wurde AdvancedTokenizer.create()."
+        "AdvancedTokenizer konnte nicht erstellt werden."
     );
 }
 
-function loadTokenizer() {
-    if (!fs.existsSync(TOKENIZER_FILE)) {
-        throw new Error(
-            "GELERNT/tokenizer.json wurde noch nicht erstellt. " +
-            "Trainiere die KI zuerst."
-        );
-    }
 
-    const factory =
-        getTokenizerFactory();
+function loadTokenizer() {
+
+    requireFile(
+        TOKENIZER_FILE,
+        "GELERNT/tokenizer.json wurde nicht gefunden. " +
+        "Trainiere LUMORA zuerst."
+    );
+
+    const tokenizer =
+        createTokenizer();
 
     const saved =
         readJSON(
             TOKENIZER_FILE
         );
 
-    let tokenizer =
-        factory.create();
-
-    if (!tokenizer) {
-        throw new Error(
-            "Tokenizer konnte nicht erstellt werden."
-        );
-    }
-
     if (
         typeof tokenizer.import ===
-        "function"
+            "function"
     ) {
-        tokenizer.import(saved);
+        tokenizer.import(
+            saved
+        );
     }
 
     else if (
         typeof tokenizer.fromJSON ===
-        "function"
+            "function"
     ) {
-        tokenizer =
+        const result =
             tokenizer.fromJSON(
                 saved
             );
+
+        if (result) {
+            return result;
+        }
     }
 
     else {
         throw new Error(
-            "Tokenizer kann nicht importiert werden. " +
-            "Es fehlt import() bzw. fromJSON()."
+            "Tokenizer kann nicht geladen werden. " +
+            "import() bzw. fromJSON() fehlt."
         );
     }
 
     return tokenizer;
 }
 
+
 /* =========================================================
    MODELL
    ========================================================= */
 
 function loadModelModule() {
-    const file = path.join(
-        ROOT,
-        "model.js"
-    );
 
-    if (!fs.existsSync(file)) {
-        throw new Error(
-            "model.js wurde nicht gefunden: " +
-            file
+    const file =
+        path.join(
+            ROOT,
+            "model.js"
         );
-    }
+
+    requireFile(
+        file,
+        "model.js wurde nicht gefunden."
+    );
 
     delete require.cache[
         require.resolve(file)
     ];
 
-    const loaded = require(file);
+    const loaded =
+        require(file);
 
     if (!loaded) {
         throw new Error(
@@ -216,46 +277,49 @@ function loadModelModule() {
     return loaded;
 }
 
+
 function loadModel() {
-    const modelModule =
+
+    requireFile(
+        MODEL_FILE,
+        "GELERNT/model.json wurde nicht gefunden. " +
+        "Trainiere LUMORA zuerst."
+    );
+
+    const module =
         loadModelModule();
 
     const Model =
-        modelModule.LanguageModel ||
-        modelModule.LargeLanguageModel ||
-        modelModule.default ||
-        modelModule;
+        module.LanguageModel ||
+        module.LargeLanguageModel ||
+        module.default ||
+        module;
 
     if (
         typeof Model !==
-        "function"
+            "function"
     ) {
         throw new Error(
             "LanguageModel konnte nicht geladen werden."
         );
     }
 
-    if (!fs.existsSync(MODEL_FILE)) {
-        throw new Error(
-            "GELERNT/model.json wurde noch nicht erstellt. " +
-            "Trainiere die KI zuerst."
-        );
-    }
-
     let config = {};
 
     if (
-        fs.existsSync(CONFIG_FILE)
+        fs.existsSync(
+            CONFIG_FILE
+        )
     ) {
         try {
-            const saved =
+            const savedConfig =
                 readJSON(
                     CONFIG_FILE
                 );
 
             config =
-                saved.model ||
-                saved ||
+                savedConfig.model ||
+                savedConfig ||
                 {};
         } catch {
             config = {};
@@ -281,7 +345,7 @@ function loadModel() {
 
     if (
         typeof model.load ===
-        "function"
+            "function"
     ) {
         model.load(
             savedModel
@@ -290,7 +354,7 @@ function loadModel() {
 
     else if (
         typeof model.fromJSON ===
-        "function"
+            "function"
     ) {
         model.fromJSON(
             savedModel
@@ -300,12 +364,13 @@ function loadModel() {
     else {
         throw new Error(
             "Das Modell kann nicht geladen werden. " +
-            "Es fehlt load() bzw. fromJSON()."
+            "load() bzw. fromJSON() fehlt."
         );
     }
 
     return model;
 }
+
 
 /* =========================================================
    PROMPT
@@ -322,22 +387,29 @@ function buildPrompt(
         "<|system|>\n";
 
     result +=
-        systemPrompt ||
-        "Du bist LUMORA, eine hilfreiche KI.";
+        String(
+            systemPrompt ||
+            "Du bist LUMORA, eine hilfreiche KI."
+        );
 
     result +=
         "\n<|end|>\n";
 
+
     if (
         Array.isArray(history)
     ) {
+
         for (
             const message of history
         ) {
+
             if (
                 !message ||
-                message.content === undefined ||
-                message.content === null
+                message.content ===
+                    undefined ||
+                message.content ===
+                    null
             ) {
                 continue;
             }
@@ -366,6 +438,7 @@ function buildPrompt(
         }
     }
 
+
     result +=
         "<|user|>\n";
 
@@ -383,86 +456,157 @@ function buildPrompt(
     return result;
 }
 
+
 /* =========================================================
-   STOP TOKEN
+   TOKENIZER → TOKEN TEXT
    ========================================================= */
 
-function isStopToken(
-    token,
-    tokenizer
+function getTokenText(
+    tokenizer,
+    tokenId
 ) {
-    const stopStrings = [
+
+    if (
+        tokenizer &&
+        tokenizer.idToToken instanceof Map
+    ) {
+        const token =
+            tokenizer.idToToken.get(
+                tokenId
+            );
+
+        if (
+            typeof token ===
+                "string"
+        ) {
+            return token;
+        }
+    }
+
+
+    if (
+        tokenizer &&
+        typeof tokenizer.getToken ===
+            "function"
+    ) {
+
+        const info =
+            tokenizer.getToken(
+                tokenId
+            );
+
+        if (
+            info &&
+            typeof info.text ===
+                "string"
+        ) {
+            return info.text;
+        }
+    }
+
+    return null;
+}
+
+
+/* =========================================================
+   SPEZIALTOKEN
+   ========================================================= */
+
+const STOP_TOKENS =
+    new Set([
         "<|end|>",
+        "<|eos|>",
         "<|user|>",
         "<|system|>",
         "<|tool|>",
         "<|assistant|>"
-    ];
+    ]);
 
-    try {
-        const decoded =
-            tokenizer.decode([
-                token
-            ]);
 
-        return stopStrings.some(
-            stop =>
-                decoded.includes(
-                    stop
-                )
+function isStopToken(
+    tokenizer,
+    tokenId
+) {
+    const token =
+        getTokenText(
+            tokenizer,
+            tokenId
         );
-    } catch {
+
+    if (
+        typeof token !==
+            "string"
+    ) {
         return false;
     }
+
+    return STOP_TOKENS.has(
+        token
+    );
 }
 
+
 /* =========================================================
-   REPETITION PENALTY
+   LOGITS → TOKEN
    ========================================================= */
 
 function applyRepetitionPenalty(
     logits,
-    tokens,
+    previousTokens,
     penalty
 ) {
     if (
-        !Array.isArray(logits) ||
-        !Number.isFinite(penalty) ||
+        !Number.isFinite(
+            penalty
+        ) ||
         penalty <= 1
     ) {
-        return logits;
+        return Array.from(
+            logits
+        );
     }
 
-    const seen =
-        new Set(tokens);
-
     const result =
-        logits.slice();
+        Array.from(
+            logits
+        );
+
+    const used =
+        new Set(
+            previousTokens
+        );
 
     for (
-        const token of seen
+        const tokenId of used
     ) {
+
         if (
-            token < 0 ||
-            token >= result.length
+            tokenId < 0 ||
+            tokenId >= result.length
         ) {
             continue;
         }
 
         const value =
             Number(
-                result[token]
+                result[tokenId]
             );
 
-        if (!Number.isFinite(value)) {
+        if (
+            !Number.isFinite(
+                value
+            )
+        ) {
             continue;
         }
 
-        if (value > 0) {
-            result[token] =
+        if (
+            value > 0
+        ) {
+            result[tokenId] =
                 value / penalty;
         } else {
-            result[token] =
+            result[tokenId] =
                 value * penalty;
         }
     }
@@ -470,128 +614,129 @@ function applyRepetitionPenalty(
     return result;
 }
 
-/* =========================================================
-   LOGITS SAMPLING
-   ========================================================= */
 
 function sampleFromLogits(
     logits,
-    tokens,
+    previousTokens,
     settings
 ) {
+    const values =
+        Array.from(
+            logits
+        );
+
     if (
-        !Array.isArray(logits) ||
-        logits.length === 0
+        values.length === 0
     ) {
         throw new Error(
             "Keine Logits erhalten."
         );
     }
 
+
     const temperature =
         Math.max(
-            0.01,
+            0.05,
             Number(
-                settings.temperature
+                settings.temperature ||
+                0.8
             )
         );
 
-    const penalty =
+
+    const repetitionPenalty =
         Math.max(
             1,
             Number(
-                settings.repetitionPenalty
+                settings.repetitionPenalty ||
+                1.08
             )
         );
 
+
     const adjusted =
         applyRepetitionPenalty(
-            logits,
-            tokens,
-            penalty
+            values,
+            previousTokens,
+            repetitionPenalty
         );
+
 
     let max =
         -Infinity;
 
-    const values =
+    for (
+        const value of adjusted
+    ) {
+        if (
+            Number.isFinite(value) &&
+            value > max
+        ) {
+            max = value;
+        }
+    }
+
+    if (
+        !Number.isFinite(max)
+    ) {
+        throw new Error(
+            "Die Logits enthalten keine gültigen Werte."
+        );
+    }
+
+
+    const probabilities =
         new Array(
             adjusted.length
         );
+
+
+    let total = 0;
 
     for (
         let i = 0;
         i < adjusted.length;
         i++
     ) {
-        const raw =
-            Number(
-                adjusted[i]
-            );
-
-        if (!Number.isFinite(raw)) {
-            values[i] = -Infinity;
-            continue;
-        }
 
         const value =
-            raw /
-            temperature;
-
-        values[i] =
-            Number.isFinite(value)
-                ? value
-                : -Infinity;
+            adjusted[i];
 
         if (
-            values[i] >
-            max
-        ) {
-            max =
-                values[i];
-        }
-    }
-
-    if (!Number.isFinite(max)) {
-        throw new Error(
-            "Die Logits enthalten keine gültigen Werte."
-        );
-    }
-
-    const probabilities =
-        new Array(
-            values.length
-        );
-
-    let total = 0;
-
-    for (
-        let i = 0;
-        i < values.length;
-        i++
-    ) {
-        if (
-            values[i] ===
-            -Infinity
+            !Number.isFinite(value)
         ) {
             probabilities[i] = 0;
             continue;
         }
 
-        const p =
+        const scaled =
+            (
+                value - max
+            ) /
+            temperature;
+
+        const probability =
             Math.exp(
-                values[i] -
-                max
+                Math.max(
+                    -80,
+                    Math.min(
+                        80,
+                        scaled
+                    )
+                )
             );
 
         probabilities[i] =
-            Number.isFinite(p)
-                ? p
+            Number.isFinite(
+                probability
+            )
+                ? probability
                 : 0;
 
         total +=
             probabilities[i];
     }
+
 
     if (
         !Number.isFinite(total) ||
@@ -600,19 +745,26 @@ function sampleFromLogits(
         return 0;
     }
 
-    let candidates =
-        probabilities.map(
-            (probability, index) => ({
-                index,
-                probability
-            })
-        );
 
-    candidates =
-        candidates.filter(
-            item =>
-                item.probability > 0
-        );
+    let candidates = [];
+
+    for (
+        let i = 0;
+        i < probabilities.length;
+        i++
+    ) {
+
+        if (
+            probabilities[i] > 0
+        ) {
+            candidates.push({
+                index: i,
+                probability:
+                    probabilities[i]
+            });
+        }
+    }
+
 
     candidates.sort(
         (a, b) =>
@@ -620,16 +772,21 @@ function sampleFromLogits(
             a.probability
     );
 
+
     const topK =
         Math.max(
             1,
             Math.min(
                 candidates.length,
-                Number(
-                    settings.topK
+                Math.floor(
+                    Number(
+                        settings.topK ||
+                        20
+                    )
                 )
             )
         );
+
 
     candidates =
         candidates.slice(
@@ -637,25 +794,29 @@ function sampleFromLogits(
             topK
         );
 
+
     const topP =
         Math.max(
-            0.01,
+            0.05,
             Math.min(
                 1,
                 Number(
-                    settings.topP
+                    settings.topP ||
+                    0.9
                 )
             )
         );
 
-    let cumulative = 0;
 
     const filtered = [];
 
+    let cumulative =
+        0;
+
     for (
-        const candidate of
-        candidates
+        const candidate of candidates
     ) {
+
         cumulative +=
             candidate.probability /
             total;
@@ -672,41 +833,52 @@ function sampleFromLogits(
         }
     }
 
-    let probabilitySum = 0;
+
+    let sum = 0;
 
     for (
-        const item of
-        filtered
+        const candidate of filtered
     ) {
-        probabilitySum +=
-            item.probability;
+        sum +=
+            candidate.probability;
     }
+
+
+    if (
+        sum <= 0
+    ) {
+        return filtered[0].index;
+    }
+
 
     let random =
         Math.random() *
-        probabilitySum;
+        sum;
+
 
     for (
-        const item of
-        filtered
+        const candidate of filtered
     ) {
+
         random -=
-            item.probability;
+            candidate.probability;
 
         if (
             random <= 0
         ) {
-            return item.index;
+            return candidate.index;
         }
     }
+
 
     return filtered[
         filtered.length - 1
     ].index;
 }
 
+
 /* =========================================================
-   RESULT → TOKEN
+   MODEL RESULT → TOKEN-ID
    ========================================================= */
 
 function extractToken(
@@ -714,49 +886,106 @@ function extractToken(
     tokens,
     settings
 ) {
+    const vocabularyLimit =
+        Number.isFinite(
+            settings.vocabSize
+        )
+            ? settings.vocabSize
+            : Infinity;
+
+
     if (
         typeof result ===
-        "number"
+            "number"
     ) {
-        return result;
+
+        if (
+            Number.isInteger(result) &&
+            result >= 0 &&
+            result < vocabularyLimit
+        ) {
+            return result;
+        }
     }
+
 
     if (
         result &&
         typeof result.token ===
-        "number"
+            "number"
     ) {
-        return result.token;
+
+        if (
+            Number.isInteger(
+                result.token
+            ) &&
+            result.token >= 0 &&
+            result.token < vocabularyLimit
+        ) {
+            return result.token;
+        }
     }
+
 
     if (
         result &&
         typeof result.tokenId ===
-        "number"
+            "number"
     ) {
-        return result.tokenId;
+
+        if (
+            Number.isInteger(
+                result.tokenId
+            ) &&
+            result.tokenId >= 0 &&
+            result.tokenId < vocabularyLimit
+        ) {
+            return result.tokenId;
+        }
     }
+
 
     let logits = null;
 
+
     if (
         result &&
-        Array.isArray(
-            result.logits
+        (
+            Array.isArray(
+                result.logits
+            ) ||
+            ArrayBuffer.isView(
+                result.logits
+            )
         )
     ) {
+
         logits =
-            result.logits;
+            Array.from(
+                result.logits
+            );
     }
+
 
     else if (
-        Array.isArray(result)
+        Array.isArray(
+            result
+        ) ||
+        ArrayBuffer.isView(
+            result
+        )
     ) {
+
         logits =
-            result;
+            Array.from(
+                result
+            );
     }
 
-    if (logits) {
+
+    if (
+        logits
+    ) {
         return sampleFromLogits(
             logits,
             tokens,
@@ -764,13 +993,100 @@ function extractToken(
         );
     }
 
+
     throw new Error(
-        "Das Modell hat weder ein Token noch Logits zurückgegeben."
+        "Das Modell hat weder eine Token-ID noch Logits zurückgegeben."
     );
 }
 
+
 /* =========================================================
-   GENERIEREN
+   VOKABULARGRÖSSE
+   ========================================================= */
+
+function getVocabSize(
+    tokenizer,
+    model
+) {
+    let tokenizerSize = 0;
+
+
+    if (
+        tokenizer &&
+        Array.isArray(
+            tokenizer.vocabulary
+        )
+    ) {
+        tokenizerSize =
+            tokenizer.vocabulary.length;
+    }
+
+
+    else if (
+        tokenizer &&
+        tokenizer.idToToken instanceof Map
+    ) {
+        tokenizerSize =
+            tokenizer.idToToken.size;
+    }
+
+
+    else if (
+        tokenizer &&
+        Number.isInteger(
+            tokenizer.vocabSize
+        )
+    ) {
+        tokenizerSize =
+            tokenizer.vocabSize;
+    }
+
+
+    const modelSize =
+        Number(
+            model &&
+            model.config &&
+            model.config.vocabSize
+        );
+
+
+    if (
+        tokenizerSize > 0 &&
+        Number.isFinite(modelSize) &&
+        modelSize > 0
+    ) {
+        return Math.min(
+            tokenizerSize,
+            modelSize
+        );
+    }
+
+
+    if (
+        tokenizerSize > 0
+    ) {
+        return tokenizerSize;
+    }
+
+
+    if (
+        Number.isFinite(
+            modelSize
+        ) &&
+        modelSize > 0
+    ) {
+        return Math.floor(
+            modelSize
+        );
+    }
+
+
+    return 1;
+}
+
+
+/* =========================================================
+   GENERATION
    ========================================================= */
 
 async function generate(
@@ -780,38 +1096,52 @@ async function generate(
     options
 ) {
     const settings = {
+
         maxTokens:
             Math.max(
                 1,
-                Number(
-                    options.maxTokens ??
-                    160
+                Math.min(
+                    512,
+                    Math.floor(
+                        Number(
+                            options.maxTokens ??
+                            160
+                        )
+                    )
                 )
             ),
 
         temperature:
-            Number(
-                options.temperature ??
-                0.82
+            Math.max(
+                0.05,
+                Math.min(
+                    2,
+                    Number(
+                        options.temperature ??
+                        0.8
+                    )
+                )
             ),
 
         topK:
             Math.max(
                 1,
-                Number(
-                    options.topK ??
-                    40
+                Math.floor(
+                    Number(
+                        options.topK ??
+                        20
+                    )
                 )
             ),
 
         topP:
             Math.max(
-                0.01,
+                0.05,
                 Math.min(
                     1,
                     Number(
                         options.topP ??
-                        0.92
+                        0.9
                     )
                 )
             ),
@@ -823,8 +1153,15 @@ async function generate(
                     options.repetitionPenalty ??
                     1.08
                 )
+            ),
+
+        vocabSize:
+            getVocabSize(
+                tokenizer,
+                model
             )
     };
+
 
     const formattedPrompt =
         buildPrompt(
@@ -833,13 +1170,17 @@ async function generate(
             options.systemPrompt
         );
 
+
     const inputTokens =
         tokenizer.encode(
             formattedPrompt
         );
 
+
     if (
-        !Array.isArray(inputTokens) ||
+        !Array.isArray(
+            inputTokens
+        ) ||
         inputTokens.length === 0
     ) {
         throw new Error(
@@ -847,35 +1188,48 @@ async function generate(
         );
     }
 
+
     let tokens =
         Array.from(
             inputTokens
         );
 
+
     const generated = [];
+
+    let previousText =
+        "";
+
 
     const contextSize =
         Number(
-            model.config?.contextSize ||
+            model &&
+            model.config &&
+            model.config.contextSize ||
             256
         );
+
 
     for (
         let step = 0;
         step < settings.maxTokens;
         step++
     ) {
+
         if (stopped) {
             break;
         }
 
+
         let context =
             tokens;
+
 
         if (
             context.length >
             contextSize
         ) {
+
             context =
                 context.slice(
                     context.length -
@@ -883,12 +1237,15 @@ async function generate(
                 );
         }
 
+
         let result;
+
 
         if (
             typeof model.predictNext ===
-            "function"
+                "function"
         ) {
+
             result =
                 await model.predictNext(
                     context,
@@ -898,8 +1255,9 @@ async function generate(
 
         else if (
             typeof model.generateNext ===
-            "function"
+                "function"
         ) {
+
             result =
                 await model.generateNext(
                     context,
@@ -909,8 +1267,9 @@ async function generate(
 
         else if (
             typeof model.forward ===
-            "function"
+                "function"
         ) {
+
             result =
                 await model.forward(
                     context
@@ -919,9 +1278,10 @@ async function generate(
 
         else {
             throw new Error(
-                "Das Modell besitzt keine Methode für die nächste Token-Vorhersage."
+                "LUMORA besitzt keine Token-Vorhersagefunktion."
             );
         }
+
 
         const nextToken =
             extractToken(
@@ -930,26 +1290,38 @@ async function generate(
                 settings
             );
 
+
         if (
             !Number.isInteger(
                 nextToken
             ) ||
-            nextToken < 0
+            nextToken < 0 ||
+            nextToken >=
+                settings.vocabSize
         ) {
+
             throw new Error(
                 "Ungültige Token-ID: " +
-                String(nextToken)
+                String(
+                    nextToken
+                )
             );
         }
 
+
+        /*
+         * Spezialtoken erkennen,
+         * bevor es in die Antwort gelangt.
+         */
         if (
             isStopToken(
-                nextToken,
-                tokenizer
+                tokenizer,
+                nextToken
             )
         ) {
             break;
         }
+
 
         tokens.push(
             nextToken
@@ -959,6 +1331,13 @@ async function generate(
             nextToken
         );
 
+
+        /*
+         * WICHTIG:
+         *
+         * Nicht die Token-ID an den Server schicken.
+         * Stattdessen den dekodierten Text.
+         */
         let partial = "";
 
         try {
@@ -966,27 +1345,68 @@ async function generate(
                 tokenizer.decode(
                     generated
                 );
-        } catch {
-            partial = "";
+        } catch (error) {
+            throw new Error(
+                "Tokenizer-Decodierung fehlgeschlagen: " +
+                error.message
+            );
         }
 
+
+        /*
+         * Nur den NEUEN Text senden.
+         * Dadurch hängt der Server nicht
+         * jedes Mal die komplette Antwort
+         * erneut an.
+         */
+        let delta = partial;
+
+        if (
+            partial.startsWith(
+                previousText
+            )
+        ) {
+            delta =
+                partial.slice(
+                    previousText.length
+                );
+        }
+
+
+        previousText =
+            partial;
+
+
+        /*
+         * Server bekommt TEXT.
+         */
         send(
             "token",
             {
                 token:
-                    nextToken,
+                    String(
+                        delta
+                    ),
 
                 text:
-                    partial,
+                    String(
+                        partial
+                    ),
+
+                tokenId:
+                    nextToken,
 
                 index:
                     step
             }
         );
 
+
+        /*
+         * Event Loop freigeben.
+         */
         if (
-            step % 2 ===
-            0
+            step % 2 === 0
         ) {
             await new Promise(
                 resolve =>
@@ -997,6 +1417,11 @@ async function generate(
         }
     }
 
+
+    /*
+     * Gesamte Antwort am Ende
+     * noch einmal sauber dekodieren.
+     */
     let answer = "";
 
     try {
@@ -1011,21 +1436,30 @@ async function generate(
         );
     }
 
+
+    /*
+     * Sicherheit:
+     * Spezialmarker aus der sichtbaren
+     * Antwort entfernen.
+     */
     const stopStrings = [
         "<|end|>",
+        "<|eos|>",
         "<|user|>",
         "<|system|>",
         "<|tool|>",
         "<|assistant|>"
     ];
 
+
     for (
-        const stop of
+        const stopString of
         stopStrings
     ) {
+
         const index =
             answer.indexOf(
-                stop
+                stopString
             );
 
         if (
@@ -1039,9 +1473,18 @@ async function generate(
         }
     }
 
+
+    answer =
+        answer
+            .replace(
+                /\r\n/g,
+                "\n"
+            )
+            .trim();
+
+
     return {
-        answer:
-            answer.trim(),
+        answer,
 
         tokens:
             generated.length,
@@ -1051,12 +1494,15 @@ async function generate(
     };
 }
 
+
 /* =========================================================
-   START
+   MAIN
    ========================================================= */
 
 async function main() {
+
     try {
+
         send(
             "status",
             {
@@ -1065,27 +1511,18 @@ async function main() {
             }
         );
 
-        if (
-            !fs.existsSync(
-                TOKENIZER_FILE
-            )
-        ) {
-            throw new Error(
-                "GELERNT/tokenizer.json wurde nicht erstellt. " +
-                "Trainiere LUMORA zuerst."
+
+        if (stopped) {
+            send(
+                "complete",
+                {
+                    answer: "",
+                    stopped: true
+                }
             );
+            return;
         }
 
-        if (
-            !fs.existsSync(
-                MODEL_FILE
-            )
-        ) {
-            throw new Error(
-                "GELERNT/model.json wurde nicht erstellt. " +
-                "Trainiere LUMORA zuerst."
-            );
-        }
 
         send(
             "status",
@@ -1095,8 +1532,10 @@ async function main() {
             }
         );
 
+
         const tokenizer =
             loadTokenizer();
+
 
         if (stopped) {
             send(
@@ -1108,6 +1547,7 @@ async function main() {
             );
             return;
         }
+
 
         send(
             "status",
@@ -1117,8 +1557,10 @@ async function main() {
             }
         );
 
+
         const model =
             loadModel();
+
 
         if (stopped) {
             send(
@@ -1131,6 +1573,7 @@ async function main() {
             return;
         }
 
+
         send(
             "status",
             {
@@ -1139,6 +1582,7 @@ async function main() {
             }
         );
 
+
         const result =
             await generate(
                 model,
@@ -1146,6 +1590,7 @@ async function main() {
                 workerData.prompt || "",
                 workerData.options || {}
             );
+
 
         send(
             "complete",
@@ -1160,9 +1605,14 @@ async function main() {
                     result.promptTokens
             }
         );
-    }
 
-    catch (error) {
+    } catch (error) {
+
+        console.error(
+            "GENERATE-WORKER ERROR:",
+            error
+        );
+
         send(
             "error",
             {
@@ -1175,5 +1625,6 @@ async function main() {
         );
     }
 }
+
 
 main();
