@@ -4,661 +4,2325 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CubeGo – eigene KI</title>
+
+  <title>CubeGo – Eigene KI</title>
+
+  <meta
+    name="description"
+    content="CubeGo – eine selbst entwickelte KI"
+  >
 
   <style>
+    /* =========================================================
+       GRUNDLAGEN
+    ========================================================= */
+
     * {
       box-sizing: border-box;
     }
 
+    html {
+      scroll-behavior: smooth;
+    }
+
     body {
       margin: 0;
-      padding: 24px;
-      font-family: system-ui, Arial, sans-serif;
-      background: #111;
-      color: #eee;
+      min-height: 100vh;
+      font-family:
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+      background:
+        radial-gradient(
+          circle at top,
+          #202020 0,
+          #111 42%,
+          #0b0b0b 100%
+        );
+      color: #f2f2f2;
     }
 
-    .container {
-      width: min(900px, 100%);
+    button,
+    textarea,
+    input {
+      font: inherit;
+    }
+
+    button {
+      user-select: none;
+    }
+
+    /* =========================================================
+       APP
+    ========================================================= */
+
+    .app {
+      width: min(1200px, calc(100% - 32px));
       margin: 0 auto;
+      padding: 24px 0 50px;
     }
 
-    h1 {
-      margin: 0 0 6px;
-      font-size: 2rem;
+    /* =========================================================
+       HEADER
+    ========================================================= */
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 20px 22px;
+      background: rgba(24, 24, 24, 0.92);
+      border: 1px solid #333;
+      border-radius: 18px;
+      box-shadow: 0 15px 50px rgba(0, 0, 0, 0.35);
+      margin-bottom: 18px;
     }
 
-    .subtitle {
-      color: #aaa;
-      margin-bottom: 22px;
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
     }
+
+    .logo {
+      width: 54px;
+      height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 14px;
+      background: #3b82f6;
+      color: white;
+      font-size: 1.45rem;
+      font-weight: 800;
+      box-shadow: 0 8px 25px rgba(59, 130, 246, 0.25);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 1.7rem;
+      letter-spacing: -0.03em;
+    }
+
+    .brand p {
+      margin: 3px 0 0;
+      color: #999;
+      font-size: 0.92rem;
+    }
+
+    .server-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 13px;
+      border: 1px solid #3a3a3a;
+      border-radius: 999px;
+      background: #171717;
+      color: #bbb;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+
+    .server-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #666;
+    }
+
+    .server-dot.online {
+      background: #53d769;
+      box-shadow: 0 0 10px rgba(83, 215, 105, 0.6);
+    }
+
+    .server-dot.error {
+      background: #ff5f56;
+      box-shadow: 0 0 10px rgba(255, 95, 86, 0.45);
+    }
+
+    /* =========================================================
+       GRID
+    ========================================================= */
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.4fr 0.9fr;
+      gap: 18px;
+    }
+
+    @media (max-width: 900px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .server-pill {
+        width: 100%;
+      }
+    }
+
+    /* =========================================================
+       CARDS
+    ========================================================= */
+
+    .card {
+      background: rgba(24, 24, 24, 0.94);
+      border: 1px solid #333;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 15px 45px rgba(0, 0, 0, 0.22);
+    }
+
+    .card + .card {
+      margin-top: 18px;
+    }
+
+    .card-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .card-title h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .card-title span {
+      color: #888;
+      font-size: 0.82rem;
+    }
+
+    /* =========================================================
+       STATUS
+    ========================================================= */
 
     #status {
-      padding: 12px 14px;
-      border: 1px solid #444;
-      border-radius: 8px;
-      background: #181818;
-      margin-bottom: 14px;
+      padding: 14px;
+      border-radius: 12px;
+      background: #151515;
+      border: 1px solid #353535;
       color: #9fd3ff;
+      line-height: 1.45;
+      min-height: 52px;
+      display: flex;
+      align-items: center;
     }
+
+    #status.success {
+      color: #a8efb3;
+      border-color: #315337;
+    }
+
+    #status.error {
+      color: #ffaaa3;
+      border-color: #5c302d;
+    }
+
+    #status.warning {
+      color: #ffe09a;
+      border-color: #5c4d29;
+    }
+
+    /* =========================================================
+       PROGRESS
+    ========================================================= */
 
     #progressBox {
-      display: none;
-      margin-bottom: 14px;
+      margin-top: 14px;
     }
 
-    .progress-bg {
+    .progress-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      color: #a9a9a9;
+      font-size: 0.85rem;
+    }
+
+    .progress-track {
       width: 100%;
-      height: 14px;
+      height: 15px;
       background: #292929;
       border-radius: 999px;
       overflow: hidden;
+      border: 1px solid #393939;
     }
 
     #progressBar {
       width: 0%;
       height: 100%;
-      background: #3b82f6;
-      transition: width 0.25s ease;
+      border-radius: inherit;
+      background: linear-gradient(
+        90deg,
+        #2563eb,
+        #60a5fa
+      );
+      transition: width 0.35s ease;
     }
 
     #progressText {
       margin-top: 7px;
-      color: #aaa;
-      font-size: 0.9rem;
+      color: #878787;
+      font-size: 0.82rem;
+    }
+
+    /* =========================================================
+       CHAT
+    ========================================================= */
+
+    .chat-box {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
     }
 
     textarea {
       width: 100%;
-      min-height: 120px;
+      min-height: 145px;
       resize: vertical;
-      padding: 12px;
-      border-radius: 8px;
-      border: 1px solid #444;
-      background: #181818;
-      color: #eee;
-      font: inherit;
+      border: 1px solid #3b3b3b;
+      border-radius: 13px;
+      background: #111;
+      color: #f3f3f3;
+      padding: 14px;
       outline: none;
+      line-height: 1.5;
+    }
+
+    textarea::placeholder {
+      color: #686868;
     }
 
     textarea:focus {
-      border-color: #3b82f6;
+      border-color: #4a8df8;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
     }
 
-    .buttons {
+    .button-row {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
-      margin-top: 12px;
     }
 
-    button {
-      padding: 10px 16px;
+    .btn {
       border: 0;
-      border-radius: 8px;
-      background: #3b82f6;
-      color: white;
-      font: inherit;
+      border-radius: 11px;
+      padding: 11px 17px;
       cursor: pointer;
+      color: #fff;
+      background: #2d2d2d;
+      transition:
+        transform 0.1s ease,
+        filter 0.15s ease,
+        opacity 0.15s ease;
     }
 
-    button:hover:not(:disabled) {
-      filter: brightness(1.08);
+    .btn:hover:not(:disabled) {
+      filter: brightness(1.12);
     }
 
-    button:disabled {
-      background: #555;
+    .btn:active:not(:disabled) {
+      transform: translateY(1px);
+    }
+
+    .btn:disabled {
+      opacity: 0.45;
       cursor: not-allowed;
     }
 
+    .btn-primary {
+      background: #3b82f6;
+    }
+
+    .btn-secondary {
+      background: #252525;
+      border: 1px solid #3c3c3c;
+    }
+
+    .btn-danger {
+      background: #6b2b2b;
+    }
+
+    .hint {
+      margin: 0;
+      color: #777;
+      font-size: 0.82rem;
+    }
+
+    /* =========================================================
+       ANTWORT
+    ========================================================= */
+
     #output {
-      margin-top: 18px;
-      min-height: 140px;
-      padding: 14px;
-      border-radius: 8px;
-      border: 1px solid #444;
-      background: #181818;
+      min-height: 220px;
+      padding: 16px;
+      border-radius: 13px;
+      border: 1px solid #3a3a3a;
+      background: #101010;
+      color: #f2f2f2;
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.6;
+    }
+
+    #output.empty {
+      color: #666;
+    }
+
+    /* =========================================================
+       CHAT-HISTORIE
+    ========================================================= */
+
+    #history {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 470px;
+      overflow-y: auto;
+      padding-right: 3px;
+    }
+
+    .history-empty {
+      color: #656565;
+      padding: 5px 0;
+    }
+
+    .message {
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid #343434;
+      background: #131313;
+    }
+
+    .message-role {
+      margin-bottom: 6px;
+      color: #8d8d8d;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .message-content {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.45;
+    }
+
+    .message.user {
+      border-color: #30425f;
+    }
+
+    .message.ai {
+      border-color: #394d3c;
+    }
+
+    /* =========================================================
+       SERVER-INFORMATIONEN
+    ========================================================= */
+
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    @media (max-width: 600px) {
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .info-item {
+      padding: 12px;
+      border-radius: 11px;
+      border: 1px solid #333;
+      background: #141414;
+    }
+
+    .info-label {
+      color: #777;
+      font-size: 0.75rem;
+      margin-bottom: 5px;
+    }
+
+    .info-value {
+      color: #ddd;
+      font-size: 0.9rem;
       overflow-wrap: anywhere;
     }
 
-    .label {
-      color: #aaa;
-      font-size: 0.9rem;
-      margin-bottom: 7px;
+    /* =========================================================
+       LOG
+    ========================================================= */
+
+    #log {
+      min-height: 130px;
+      max-height: 260px;
+      overflow-y: auto;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid #323232;
+      background: #0d0d0d;
+      color: #999;
+      font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Consolas,
+        monospace;
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+      line-height: 1.5;
     }
 
-    .info {
-      margin-top: 12px;
-      color: #888;
-      font-size: 0.85rem;
+    .log-line {
+      margin-bottom: 5px;
+    }
+
+    .log-time {
+      color: #555;
+    }
+
+    .log-error {
+      color: #ff9890;
+    }
+
+    .log-success {
+      color: #9ee8a8;
+    }
+
+    .log-info {
+      color: #93c5fd;
+    }
+
+    /* =========================================================
+       FOOTER
+    ========================================================= */
+
+    footer {
+      margin-top: 18px;
+      padding: 14px 4px;
+      color: #636363;
+      text-align: center;
+      font-size: 0.78rem;
     }
   </style>
 </head>
 
 <body>
-  <div class="container">
-    <h1>cubego</h1>
-    <div class="subtitle">Deine eigene KI</div>
 
-    <div id="status">Verbinde mit dem KI-Server…</div>
+  <div class="app">
 
-    <div id="progressBox">
-      <div class="progress-bg">
-        <div id="progressBar"></div>
+    <!-- =======================================================
+         HEADER
+    ======================================================== -->
+
+    <header class="header">
+
+      <div class="brand">
+
+        <div class="logo">
+          CG
+        </div>
+
+        <div>
+          <h1>CubeGo</h1>
+          <p>Deine eigene KI</p>
+        </div>
+
       </div>
 
-      <div id="progressText">0 %</div>
-    </div>
+      <div class="server-pill">
+        <div id="serverDot" class="server-dot"></div>
+        <span id="serverText">Server wird geprüft…</span>
+      </div>
 
-    <div class="label">Dein Prompt</div>
+    </header>
 
-    <textarea
-      id="input"
-      placeholder="Schreib hier deine Frage oder deinen Text hinein…"
-    ></textarea>
 
-    <div class="buttons">
-      <button id="trainBtn">Trainieren</button>
-      <button id="generateBtn" disabled>Generieren</button>
-    </div>
+    <!-- =======================================================
+         HAUPTGRID
+    ======================================================== -->
 
-    <div class="label" style="margin-top:18px;">Antwort</div>
+    <main class="grid">
 
-    <div id="output">Noch keine Antwort.</div>
+      <!-- =====================================================
+           LINKE SPALTE
+      ====================================================== -->
 
-    <div class="info">
-      Das Modell wird auf dem Render-Server trainiert.
-    </div>
+      <section>
+
+        <!-- STATUS -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>KI-Status</h2>
+            <span>Render Server</span>
+          </div>
+
+          <div id="status">
+            Verbinde mit CubeGo…
+          </div>
+
+          <div id="progressBox">
+
+            <div class="progress-header">
+              <span>Trainingsfortschritt</span>
+              <span id="progressPercent">0.0 %</span>
+            </div>
+
+            <div class="progress-track">
+              <div id="progressBar"></div>
+            </div>
+
+            <div id="progressText">
+              Noch kein Training gestartet.
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <!-- CHAT -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>CubeGo fragen</h2>
+            <span>Eigene KI</span>
+          </div>
+
+          <div class="chat-box">
+
+            <textarea
+              id="input"
+              placeholder="Schreibe hier deine Frage an CubeGo…"
+              spellcheck="true"
+            ></textarea>
+
+            <div class="button-row">
+
+              <button
+                id="generateBtn"
+                class="btn btn-primary"
+                disabled
+              >
+                Generieren
+              </button>
+
+              <button
+                id="clearInputBtn"
+                class="btn btn-secondary"
+              >
+                Eingabe löschen
+              </button>
+
+            </div>
+
+            <p class="hint">
+              Tipp: Mit Strg + Enter kannst du die Generierung starten.
+            </p>
+
+          </div>
+
+        </div>
+
+
+        <!-- ANTWORT -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>Antwort von CubeGo</h2>
+            <span id="generationState">Bereit</span>
+          </div>
+
+          <div
+            id="output"
+            class="empty"
+          >
+            Noch keine Antwort.
+          </div>
+
+        </div>
+
+
+        <!-- VERLAUF -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>Chat-Verlauf</h2>
+
+            <button
+              id="clearHistoryBtn"
+              class="btn btn-secondary"
+              style="padding:7px 10px;"
+            >
+              Verlauf löschen
+            </button>
+          </div>
+
+          <div id="history">
+
+            <div class="history-empty">
+              Noch keine Nachrichten.
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- =====================================================
+           RECHTE SPALTE
+      ====================================================== -->
+
+      <aside>
+
+        <!-- TRAINING -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>Modell trainieren</h2>
+            <span>Serverseitig</span>
+          </div>
+
+          <p
+            style="
+              margin-top:0;
+              color:#999;
+              line-height:1.5;
+            "
+          >
+            Das Training läuft auf deinem Render-Server.
+            Der Browser führt keine Node.js-Worker mehr aus.
+          </p>
+
+          <div class="button-row">
+
+            <button
+              id="trainBtn"
+              class="btn btn-primary"
+            >
+              Trainieren
+            </button>
+
+            <button
+              id="refreshBtn"
+              class="btn btn-secondary"
+            >
+              Status aktualisieren
+            </button>
+
+          </div>
+
+        </div>
+
+
+        <!-- MODELL -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>Modellstatus</h2>
+            <span>CubeGo</span>
+          </div>
+
+          <div class="info-grid">
+
+            <div class="info-item">
+              <div class="info-label">
+                Modell
+              </div>
+
+              <div
+                id="modelState"
+                class="info-value"
+              >
+                Wird geprüft…
+              </div>
+            </div>
+
+            <div class="info-item">
+              <div class="info-label">
+                Tokenizer
+              </div>
+
+              <div
+                id="tokenizerState"
+                class="info-value"
+              >
+                Wird geprüft…
+              </div>
+            </div>
+
+            <div class="info-item">
+              <div class="info-label">
+                Config
+              </div>
+
+              <div
+                id="configState"
+                class="info-value"
+              >
+                Wird geprüft…
+              </div>
+            </div>
+
+            <div class="info-item">
+              <div class="info-label">
+                Training
+              </div>
+
+              <div
+                id="trainingState"
+                class="info-value"
+              >
+                Wird geprüft…
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <!-- SERVER -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>Server</h2>
+            <span>Diagnose</span>
+          </div>
+
+          <div class="info-grid">
+
+            <div class="info-item">
+              <div class="info-label">
+                API
+              </div>
+
+              <div
+                id="apiState"
+                class="info-value"
+              >
+                Prüfe…
+              </div>
+            </div>
+
+            <div class="info-item">
+              <div class="info-label">
+                Verbindung
+              </div>
+
+              <div
+                id="connectionState"
+                class="info-value"
+              >
+                Prüfe…
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <!-- LOG -->
+
+        <div class="card">
+
+          <div class="card-title">
+            <h2>Debug-Log</h2>
+
+            <button
+              id="clearLogBtn"
+              class="btn btn-secondary"
+              style="padding:7px 10px;"
+            >
+              Leeren
+            </button>
+          </div>
+
+          <div id="log"></div>
+
+        </div>
+
+      </aside>
+
+    </main>
+
+
+    <footer>
+      CubeGo · eigene KI · Frontend ohne externe Bibliotheken
+    </footer>
+
   </div>
+
 
   <script>
     "use strict";
 
-    const statusEl = document.getElementById("status");
-    const outputEl = document.getElementById("output");
-    const inputEl = document.getElementById("input");
-    const trainBtn = document.getElementById("trainBtn");
-    const generateBtn = document.getElementById("generateBtn");
-    const progressBox = document.getElementById("progressBox");
-    const progressBar = document.getElementById("progressBar");
-    const progressText = document.getElementById("progressText");
+    /* =========================================================
+       ELEMENTE
+    ========================================================= */
+
+    const statusEl =
+      document.getElementById("status");
+
+    const outputEl =
+      document.getElementById("output");
+
+    const inputEl =
+      document.getElementById("input");
+
+    const trainBtn =
+      document.getElementById("trainBtn");
+
+    const generateBtn =
+      document.getElementById("generateBtn");
+
+    const refreshBtn =
+      document.getElementById("refreshBtn");
+
+    const clearInputBtn =
+      document.getElementById("clearInputBtn");
+
+    const clearHistoryBtn =
+      document.getElementById("clearHistoryBtn");
+
+    const clearLogBtn =
+      document.getElementById("clearLogBtn");
+
+    const progressBox =
+      document.getElementById("progressBox");
+
+    const progressBar =
+      document.getElementById("progressBar");
+
+    const progressPercent =
+      document.getElementById("progressPercent");
+
+    const progressText =
+      document.getElementById("progressText");
+
+    const historyEl =
+      document.getElementById("history");
+
+    const logEl =
+      document.getElementById("log");
+
+    const serverDot =
+      document.getElementById("serverDot");
+
+    const serverText =
+      document.getElementById("serverText");
+
+    const modelState =
+      document.getElementById("modelState");
+
+    const tokenizerState =
+      document.getElementById("tokenizerState");
+
+    const configState =
+      document.getElementById("configState");
+
+    const trainingState =
+      document.getElementById("trainingState");
+
+    const apiState =
+      document.getElementById("apiState");
+
+    const connectionState =
+      document.getElementById("connectionState");
+
+    const generationState =
+      document.getElementById("generationState");
+
+
+    /* =========================================================
+       STATUS-VARIABLEN
+    ========================================================= */
 
     let modelReady = false;
-    let trainingPolling = false;
-    let generationPolling = false;
+    let trainingRunning = false;
+    let generationRunning = false;
 
-    async function api(url, options = {}) {
-      const response = await fetch(url, {
-        cache: "no-store",
-        ...options,
-        headers: {
-          "Content-Type": "application/json",
-          ...(options.headers || {})
-        }
-      });
+    let trainingPollRunning = false;
+    let generationPollRunning = false;
 
-      let data;
+
+    /* =========================================================
+       LOG
+    ========================================================= */
+
+    function log(message, type = "info") {
+
+      const line =
+        document.createElement("div");
+
+      line.className =
+        "log-line " +
+        (
+          type === "error"
+            ? "log-error"
+            : type === "success"
+              ? "log-success"
+              : "log-info"
+        );
+
+      const now =
+        new Date().toLocaleTimeString(
+          "de-DE"
+        );
+
+      line.innerHTML =
+        `<span class="log-time">[${now}]</span> ` +
+        escapeHtml(message);
+
+      logEl.appendChild(line);
+
+      while (logEl.children.length > 100) {
+        logEl.removeChild(
+          logEl.firstChild
+        );
+      }
+
+      logEl.scrollTop =
+        logEl.scrollHeight;
+    }
+
+
+    function escapeHtml(value) {
+
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+
+    /* =========================================================
+       STATUS-ANZEIGE
+    ========================================================= */
+
+    function setStatus(
+      message,
+      type = "normal"
+    ) {
+
+      statusEl.textContent =
+        message;
+
+      statusEl.classList.remove(
+        "success",
+        "error",
+        "warning"
+      );
+
+      if (
+        type === "success" ||
+        type === "error" ||
+        type === "warning"
+      ) {
+        statusEl.classList.add(type);
+      }
+    }
+
+
+    /* =========================================================
+       BUTTONS
+    ========================================================= */
+
+    function updateButtons() {
+
+      trainBtn.disabled =
+        trainingRunning ||
+        generationRunning;
+
+      generateBtn.disabled =
+        !modelReady ||
+        trainingRunning ||
+        generationRunning;
+
+      refreshBtn.disabled =
+        trainingRunning &&
+        !generationRunning;
+    }
+
+
+    /* =========================================================
+       API
+    ========================================================= */
+
+    async function api(
+      url,
+      options = {}
+    ) {
+
+      const response =
+        await fetch(
+          url,
+          {
+            ...options,
+            cache: "no-store",
+            headers: {
+              "Content-Type":
+                "application/json",
+
+              ...(options.headers || {})
+            }
+          }
+        );
+
+      let data = null;
 
       try {
-        data = await response.json();
+
+        data =
+          await response.json();
+
       } catch {
+
         throw new Error(
-          `Server antwortet nicht mit JSON (${response.status}).`
+          "Der Server hat keine gültige JSON-Antwort gesendet."
         );
       }
 
+
       if (!response.ok) {
+
         throw new Error(
-          data.error ||
-          data.message ||
-          data.details ||
-          `HTTP-Fehler ${response.status}`
+          data?.error ||
+          data?.message ||
+          data?.details ||
+          `HTTP ${response.status}`
         );
       }
+
 
       return data;
     }
 
-    function setStatus(text) {
-      statusEl.textContent = text;
-    }
 
-    function setProgress(value, details = "") {
-      const percent = Math.max(
-        0,
-        Math.min(100, Number(value) || 0)
-      );
+    /* =========================================================
+       PROGRESS
+    ========================================================= */
 
-      progressBox.style.display = "block";
-      progressBar.style.width = percent + "%";
+    function showProgress(
+      value,
+      text = ""
+    ) {
 
-      progressText.textContent =
-        `${percent.toFixed(1)} %` +
-        (details ? ` – ${details}` : "");
-    }
+      let percent =
+        Number(value);
 
-    function hideProgress() {
-      progressBox.style.display = "none";
-      progressBar.style.width = "0%";
-      progressText.textContent = "0 %";
-    }
+      if (!Number.isFinite(percent)) {
+        percent = 0;
+      }
 
-    function updateButtons() {
-      trainBtn.disabled =
-        trainingPolling || generationPolling;
-
-      generateBtn.disabled =
-        !modelReady ||
-        trainingPolling ||
-        generationPolling;
-    }
-
-    async function loadStatus() {
-      try {
-        const data = await api("/api/status");
-
-        const model = data.model || {};
-        const training = data.training || {};
-
-        modelReady =
-          model.model === true &&
-          model.tokenizer === true &&
-          model.config === true;
-
-        if (training.running) {
-          trainingPolling = true;
-
-          setStatus(
-            training.message || "Modell wird trainiert…"
-          );
-
-          setProgress(
-            training.progress || 0,
-            training.totalEpochs
-              ? `Epoche ${training.epoch || 0}/${training.totalEpochs}`
-              : ""
-          );
-
-          startTrainingPolling();
-        } else if (modelReady) {
-          hideProgress();
-
-          setStatus(
-            "Modell bereit. Du kannst jetzt generieren."
-          );
-        } else {
-          hideProgress();
-
-          setStatus(
-            "Noch kein fertiges Modell vorhanden. Klicke auf „Trainieren“."
-          );
-        }
-
-        updateButtons();
-
-      } catch (error) {
-        modelReady = false;
-
-        setStatus(
-          "Verbindungsfehler: " + error.message
+      percent =
+        Math.max(
+          0,
+          Math.min(
+            100,
+            percent
+          )
         );
 
-        updateButtons();
+      progressBox.style.display =
+        "block";
+
+      progressBar.style.width =
+        percent + "%";
+
+      progressPercent.textContent =
+        percent.toFixed(1) + " %";
+
+      progressText.textContent =
+        text ||
+        "Training läuft…";
+    }
+
+
+    function hideProgress() {
+
+      progressBox.style.display =
+        "none";
+
+      progressBar.style.width =
+        "0%";
+
+      progressPercent.textContent =
+        "0.0 %";
+
+      progressText.textContent =
+        "";
+    }
+
+
+    /* =========================================================
+       MODELL-ANZEIGE
+    ========================================================= */
+
+    function setModelValue(
+      element,
+      ready
+    ) {
+
+      element.textContent =
+        ready
+          ? "Vorhanden"
+          : "Nicht vorhanden";
+    }
+
+
+    /* =========================================================
+       CHAT-VERLAUF
+    ========================================================= */
+
+    let history =
+      loadHistory();
+
+
+    function loadHistory() {
+
+      try {
+
+        const saved =
+          localStorage.getItem(
+            "cubego_history"
+          );
+
+        if (!saved) {
+          return [];
+        }
+
+        const parsed =
+          JSON.parse(saved);
+
+        return Array.isArray(parsed)
+          ? parsed
+          : [];
+
+      } catch {
+
+        return [];
       }
     }
 
-    async function startTraining() {
-      if (trainingPolling) {
+
+    function saveHistory() {
+
+      try {
+
+        localStorage.setItem(
+          "cubego_history",
+          JSON.stringify(history)
+        );
+
+      } catch {
+
+        log(
+          "Chat-Verlauf konnte nicht gespeichert werden.",
+          "error"
+        );
+      }
+    }
+
+
+    function renderHistory() {
+
+      historyEl.innerHTML = "";
+
+      if (!history.length) {
+
+        const empty =
+          document.createElement("div");
+
+        empty.className =
+          "history-empty";
+
+        empty.textContent =
+          "Noch keine Nachrichten.";
+
+        historyEl.appendChild(
+          empty
+        );
+
         return;
       }
 
+
+      for (
+        const item of history
+      ) {
+
+        const wrapper =
+          document.createElement("div");
+
+        wrapper.className =
+          "message " +
+          (
+            item.role === "user"
+              ? "user"
+              : "ai"
+          );
+
+
+        const role =
+          document.createElement("div");
+
+        role.className =
+          "message-role";
+
+        role.textContent =
+          item.role === "user"
+            ? "Du"
+            : "CubeGo";
+
+
+        const content =
+          document.createElement("div");
+
+        content.className =
+          "message-content";
+
+        content.textContent =
+          item.content;
+
+
+        wrapper.appendChild(
+          role
+        );
+
+        wrapper.appendChild(
+          content
+        );
+
+        historyEl.appendChild(
+          wrapper
+        );
+      }
+
+
+      historyEl.scrollTop =
+        historyEl.scrollHeight;
+    }
+
+
+    function addHistory(
+      role,
+      content
+    ) {
+
+      history.push({
+        role,
+        content,
+        time:
+          Date.now()
+      });
+
+
+      if (history.length > 100) {
+        history =
+          history.slice(
+            -100
+          );
+      }
+
+
+      saveHistory();
+      renderHistory();
+    }
+
+
+    /* =========================================================
+       SERVERSTATUS
+    ========================================================= */
+
+    async function checkServerStatus() {
+
       try {
-        trainingPolling = true;
-        modelReady = false;
 
-        outputEl.textContent =
-          "Das Modell wird trainiert…";
+        apiState.textContent =
+          "Verbunden";
 
-        setStatus("Starte Training…");
-        setProgress(0, "Training wird gestartet…");
+        connectionState.textContent =
+          "Online";
+
+        serverDot.classList.remove(
+          "error"
+        );
+
+        serverDot.classList.add(
+          "online"
+        );
+
+        serverText.textContent =
+          "Render verbunden";
+
+        log(
+          "Verbindung zum Server erfolgreich.",
+          "success"
+        );
+
+
+        const data =
+          await api(
+            "/api/status"
+          );
+
+
+        updateModelStatus(
+          data
+        );
+
+
+        return data;
+
+      } catch (error) {
+
+        apiState.textContent =
+          "Fehler";
+
+        connectionState.textContent =
+          "Offline";
+
+        serverDot.classList.remove(
+          "online"
+        );
+
+        serverDot.classList.add(
+          "error"
+        );
+
+        serverText.textContent =
+          "Serverfehler";
+
+        setStatus(
+          "Server nicht erreichbar: " +
+          error.message,
+          "error"
+        );
+
+        log(
+          "Serverfehler: " +
+          error.message,
+          "error"
+        );
+
+        modelReady =
+          false;
 
         updateButtons();
 
+        return null;
+      }
+    }
+
+
+    /* =========================================================
+       MODELLSTATUS
+    ========================================================= */
+
+    function updateModelStatus(
+      data
+    ) {
+
+      const model =
+        data?.model || {};
+
+      const training =
+        data?.training || {};
+
+
+      const hasModel =
+        model.model === true;
+
+      const hasTokenizer =
+        model.tokenizer === true;
+
+      const hasConfig =
+        model.config === true;
+
+
+      setModelValue(
+        modelState,
+        hasModel
+      );
+
+      setModelValue(
+        tokenizerState,
+        hasTokenizer
+      );
+
+      setModelValue(
+        configState,
+        hasConfig
+      );
+
+
+      modelReady =
+        hasModel &&
+        hasTokenizer &&
+        hasConfig;
+
+
+      trainingRunning =
+        Boolean(
+          training.running
+        );
+
+
+      trainingState.textContent =
+        training.running
+          ? "Läuft"
+          : "Nicht aktiv";
+
+
+      if (training.running) {
+
+        showProgress(
+          training.progress || 0,
+          training.message ||
+          "Training läuft…"
+        );
+
+        setStatus(
+          training.message ||
+          "Trainiere Modell…"
+        );
+
+      } else if (modelReady) {
+
+        setStatus(
+          "Modell bereit. Du kannst CubeGo jetzt fragen.",
+          "success"
+        );
+
+      } else {
+
+        setStatus(
+          "Noch kein fertiges Modell vorhanden. Starte das Training.",
+          "warning"
+        );
+      }
+
+
+      updateButtons();
+    }
+
+
+    /* =========================================================
+       TRAINING STARTEN
+    ========================================================= */
+
+    async function startTraining() {
+
+      if (trainingRunning) {
+        return;
+      }
+
+
+      try {
+
+        trainingRunning =
+          true;
+
+        modelReady =
+          false;
+
+
+        updateButtons();
+
+
+        outputEl.textContent =
+          "Training wurde gestartet…";
+
+        outputEl.classList.add(
+          "empty"
+        );
+
+
+        generationState.textContent =
+          "Training";
+
+
+        setStatus(
+          "Starte Training…"
+        );
+
+
+        showProgress(
+          0,
+          "Warte auf den Trainings-Worker…"
+        );
+
+
+        log(
+          "Training wird auf Render gestartet."
+        );
+
+
         /*
-         * KLEINES TESTMODELL
-         *
-         * Absichtlich deutlich kleiner als vorher,
-         * damit Render schneller trainieren kann.
+         * Kleiner Startwert für den ersten Test.
+         * Die eigentliche Modellkonfiguration
+         * wird vom Backend bestimmt.
          */
-        const result = await api("/api/train/start", {
-          method: "POST",
 
-          body: JSON.stringify({
-            epochs: 1,
-            sequenceLength: 32,
-            learningRate: 0.0003,
-            contextSize: 32,
-            embeddingSize: 64,
-            layers: 2,
-            heads: 2,
-            headSize: 32,
-            feedForwardSize: 128
-          })
-        });
+        const result =
+          await api(
+            "/api/train/start",
+            {
+              method: "POST",
 
-        if (!result.success) {
+              body:
+                JSON.stringify({
+                  epochs: 1,
+                  sequenceLength: 32,
+                  learningRate: 0.0003,
+                  contextSize: 32
+                })
+            }
+          );
+
+
+        if (
+          result &&
+          result.success === false
+        ) {
+
           throw new Error(
             result.message ||
             "Training konnte nicht gestartet werden."
           );
         }
 
+
+        log(
+          "Training erfolgreich an den Server übergeben.",
+          "success"
+        );
+
+
         startTrainingPolling();
 
       } catch (error) {
-        trainingPolling = false;
-        modelReady = false;
+
+        trainingRunning =
+          false;
+
+        modelReady =
+          false;
+
+
+        generationState.textContent =
+          "Fehler";
+
 
         hideProgress();
 
+
         setStatus(
-          "Trainingsfehler: " + error.message
+          "Trainingsfehler: " +
+          error.message,
+          "error"
         );
+
 
         outputEl.textContent =
           "Training konnte nicht gestartet werden.";
 
+        outputEl.classList.add(
+          "empty"
+        );
+
+
+        log(
+          "Trainingsfehler: " +
+          error.message,
+          "error"
+        );
+
+
         updateButtons();
       }
     }
 
+
+    /* =========================================================
+       TRAININGSSTATUS ABFRAGEN
+    ========================================================= */
+
     async function startTrainingPolling() {
-      if (startTrainingPolling.running) {
+
+      if (trainingPollRunning) {
         return;
       }
 
-      startTrainingPolling.running = true;
-      trainingPolling = true;
+
+      trainingPollRunning =
+        true;
+
 
       try {
+
         while (true) {
+
           const data =
-            await api("/api/training-state");
+            await api(
+              "/api/training-state"
+            );
+
 
           const progress =
-            Number(data.progress) || 0;
+            Number(
+              data?.progress
+            ) || 0;
 
-          setProgress(
+
+          let details =
+            data?.message ||
+            "Training läuft…";
+
+
+          if (
+            data?.totalEpochs
+          ) {
+
+            details +=
+              ` · Epoche ${
+                data.epoch || 0
+              }/${
+                data.totalEpochs
+              }`;
+          }
+
+
+          showProgress(
             progress,
-            data.totalEpochs
-              ? `Epoche ${data.epoch || 0}/${data.totalEpochs}`
-              : data.message || ""
+            details
           );
 
-          if (data.phase === "error") {
-            trainingPolling = false;
-            modelReady = false;
-
-            setStatus(
-              "Trainingsfehler: " +
-              (
-                data.error ||
-                data.message ||
-                "Unbekannter Fehler"
-              )
-            );
-
-            hideProgress();
-            updateButtons();
-
-            break;
-          }
 
           if (
-            !data.running &&
-            data.phase === "finished"
+            data?.message
           ) {
-            trainingPolling = false;
 
-            setProgress(
+            trainingState.textContent =
+              data.message;
+          }
+
+
+          if (
+            data?.phase === "error"
+          ) {
+
+            throw new Error(
+              data.error ||
+              data.message ||
+              "Unbekannter Trainingsfehler."
+            );
+          }
+
+
+          if (
+            !data?.running &&
+            data?.phase === "finished"
+          ) {
+
+            trainingRunning =
+              false;
+
+
+            showProgress(
               100,
-              "Training abgeschlossen"
+              "Training abgeschlossen."
             );
+
+
+            log(
+              "Training abgeschlossen.",
+              "success"
+            );
+
 
             setStatus(
-              "Training abgeschlossen. Prüfe Modell…"
+              "Training abgeschlossen. Prüfe das Modell…"
             );
 
-            await checkModel();
 
-            updateButtons();
+            await checkModelStatus();
+
 
             break;
           }
+
 
           if (
-            !data.running &&
-            data.phase === "idle"
+            !data?.running &&
+            data?.phase === "idle"
           ) {
-            trainingPolling = false;
 
-            await checkModel();
+            trainingRunning =
+              false;
 
-            updateButtons();
+
+            await checkModelStatus();
+
 
             break;
           }
 
-          setStatus(
-            data.message ||
-            "Trainiere Modell…"
-          );
 
-          await new Promise(resolve =>
-            setTimeout(resolve, 1000)
+          await sleep(
+            1000
           );
         }
 
       } catch (error) {
-        trainingPolling = false;
 
-        setStatus(
-          "Fehler beim Trainingsstatus: " +
-          error.message
-        );
-
-        updateButtons();
-
-      } finally {
-        startTrainingPolling.running = false;
-      }
-    }
-
-    async function checkModel() {
-      try {
-        const data =
-          await api("/api/status");
-
-        const model =
-          data.model || {};
+        trainingRunning =
+          false;
 
         modelReady =
-          model.model === true &&
-          model.tokenizer === true &&
-          model.config === true;
+          false;
 
-        if (modelReady) {
-          setStatus(
-            "Modell bereit. Du kannst jetzt generieren."
-          );
-        } else {
-          setStatus(
-            "Training beendet, aber die Modelldateien sind noch nicht vollständig vorhanden."
-          );
-        }
 
-        updateButtons();
+        hideProgress();
 
-      } catch (error) {
-        modelReady = false;
 
         setStatus(
-          "Modellstatus konnte nicht geprüft werden: " +
-          error.message
+          "Trainingsfehler: " +
+          error.message,
+          "error"
         );
+
+
+        log(
+          "Fehler beim Trainingsstatus: " +
+          error.message,
+          "error"
+        );
+
+      } finally {
+
+        trainingPollRunning =
+          false;
+
+        generationState.textContent =
+          modelReady
+            ? "Bereit"
+            : "Nicht bereit";
 
         updateButtons();
       }
     }
 
+
+    /* =========================================================
+       MODELL PRÜFEN
+    ========================================================= */
+
+    async function checkModelStatus() {
+
+      try {
+
+        const data =
+          await api(
+            "/api/status"
+          );
+
+
+        updateModelStatus(
+          data
+        );
+
+
+        if (modelReady) {
+
+          generationState.textContent =
+            "Bereit";
+
+          outputEl.textContent =
+            "Training abgeschlossen. Stelle jetzt eine Frage.";
+
+          outputEl.classList.add(
+            "empty"
+          );
+
+
+          log(
+            "Modell ist vollständig vorhanden.",
+            "success"
+          );
+
+        } else {
+
+          generationState.textContent =
+            "Nicht bereit";
+
+          log(
+            "Modelldateien sind noch nicht vollständig vorhanden.",
+            "error"
+          );
+        }
+
+
+      } catch (error) {
+
+        modelReady =
+          false;
+
+        updateButtons();
+
+        throw error;
+      }
+    }
+
+
+    /* =========================================================
+       GENERIERUNG
+    ========================================================= */
+
     async function startGeneration() {
+
       const prompt =
         inputEl.value.trim();
 
+
       if (!prompt) {
+
         setStatus(
-          "Bitte zuerst einen Prompt eingeben."
+          "Bitte zuerst eine Eingabe schreiben.",
+          "warning"
         );
 
         inputEl.focus();
+
         return;
       }
 
+
       if (!modelReady) {
+
         setStatus(
-          "Das Modell ist noch nicht bereit."
+          "Das Modell ist noch nicht bereit.",
+          "warning"
         );
 
         return;
       }
 
-      if (generationPolling) {
+
+      if (generationRunning) {
         return;
       }
 
+
       try {
-        generationPolling = true;
+
+        generationRunning =
+          true;
+
 
         updateButtons();
 
-        outputEl.textContent = "";
+
+        generationState.textContent =
+          "Generiere";
+
+
+        outputEl.textContent =
+          "CubeGo denkt…";
+
+        outputEl.classList.remove(
+          "empty"
+        );
+
 
         setStatus(
           "Generiere Antwort…"
         );
 
+
+        addHistory(
+          "user",
+          prompt
+        );
+
+
+        log(
+          "Generierung gestartet."
+        );
+
+
         const result =
-          await api("/api/generate", {
-            method: "POST",
+          await api(
+            "/api/generate",
+            {
+              method: "POST",
 
-            body: JSON.stringify({
-              prompt: prompt
-            })
-          });
+              body:
+                JSON.stringify({
+                  prompt
+                })
+            }
+          );
 
-        if (!result.success) {
+
+        if (
+          result &&
+          result.success === false
+        ) {
+
           throw new Error(
             result.message ||
-            "Generation konnte nicht gestartet werden."
+            "Generierung konnte nicht gestartet werden."
           );
         }
+
 
         await pollGeneration();
 
       } catch (error) {
-        generationPolling = false;
+
+        generationRunning =
+          false;
+
+
+        generationState.textContent =
+          "Fehler";
+
 
         setStatus(
           "Generierungsfehler: " +
-          error.message
+          error.message,
+          "error"
         );
 
+
         outputEl.textContent =
-          "Es konnte keine Antwort erzeugt werden.";
+          "Keine Antwort: " +
+          error.message;
+
+
+        log(
+          "Generierungsfehler: " +
+          error.message,
+          "error"
+        );
+
 
         updateButtons();
       }
     }
 
+
+    /* =========================================================
+       GENERIERUNGSSTATUS
+    ========================================================= */
+
     async function pollGeneration() {
-      if (pollGeneration.running) {
+
+      if (generationPollRunning) {
         return;
       }
 
-      pollGeneration.running = true;
+
+      generationPollRunning =
+        true;
+
 
       try {
-        while (true) {
-          const data =
-            await api("/api/generate/status");
 
-          if (data.text) {
+        while (true) {
+
+          const data =
+            await api(
+              "/api/generate/status"
+            );
+
+
+          if (
+            data?.text
+          ) {
+
             outputEl.textContent =
               data.text;
+
+            outputEl.classList.remove(
+              "empty"
+            );
           }
 
-          if (data.error) {
+
+          if (
+            data?.error
+          ) {
+
             throw new Error(
               data.error
             );
           }
 
-          if (!data.running) {
-            generationPolling = false;
 
-            if (data.text) {
+          if (
+            !data?.running
+          ) {
+
+            generationRunning =
+              false;
+
+
+            generationState.textContent =
+              "Fertig";
+
+
+            if (
+              data?.text
+            ) {
+
               outputEl.textContent =
                 data.text;
+
+              addHistory(
+                "ai",
+                data.text
+              );
             }
 
-            setStatus("Fertig.");
+
+            setStatus(
+              "CubeGo ist fertig.",
+              "success"
+            );
+
+
+            log(
+              "Antwort erfolgreich erzeugt.",
+              "success"
+            );
+
 
             updateButtons();
 
             break;
           }
 
-          await new Promise(resolve =>
-            setTimeout(resolve, 700)
+
+          generationState.textContent =
+            "Generiere…";
+
+
+          await sleep(
+            700
           );
         }
 
       } finally {
-        pollGeneration.running = false;
+
+        generationPollRunning =
+          false;
       }
     }
+
+
+    /* =========================================================
+       HILFSFUNKTION
+    ========================================================= */
+
+    function sleep(ms) {
+
+      return new Promise(
+        resolve =>
+          setTimeout(
+            resolve,
+            ms
+          )
+      );
+    }
+
+
+    /* =========================================================
+       EVENTS
+    ========================================================= */
 
     trainBtn.addEventListener(
       "click",
       startTraining
     );
 
+
     generateBtn.addEventListener(
       "click",
       startGeneration
     );
 
+
+    refreshBtn.addEventListener(
+      "click",
+      async () => {
+
+        refreshBtn.disabled =
+          true;
+
+        log(
+          "Serverstatus wird aktualisiert."
+        );
+
+        try {
+
+          await checkServerStatus();
+
+        } finally {
+
+          refreshBtn.disabled =
+            false;
+
+          updateButtons();
+        }
+      }
+    );
+
+
+    clearInputBtn.addEventListener(
+      "click",
+      () => {
+
+        inputEl.value = "";
+
+        inputEl.focus();
+      }
+    );
+
+
+    clearHistoryBtn.addEventListener(
+      "click",
+      () => {
+
+        history = [];
+
+        saveHistory();
+
+        renderHistory();
+
+        log(
+          "Chat-Verlauf gelöscht."
+        );
+      }
+    );
+
+
+    clearLogBtn.addEventListener(
+      "click",
+      () => {
+
+        logEl.innerHTML = "";
+      }
+    );
+
+
     inputEl.addEventListener(
       "keydown",
       event => {
+
         if (
           event.key === "Enter" &&
-          (event.ctrlKey || event.metaKey)
+          (event.ctrlKey ||
+           event.metaKey)
         ) {
+
           event.preventDefault();
 
-          if (!generateBtn.disabled) {
+          if (
+            !generateBtn.disabled
+          ) {
+
             startGeneration();
           }
         }
       }
     );
 
-    // Beim Laden echten Serverstatus holen.
-    loadStatus();
+
+    /* =========================================================
+       START
+    ========================================================= */
+
+    renderHistory();
+
+    log(
+      "CubeGo wird gestartet."
+    );
+
+
+    (async () => {
+
+      const data =
+        await checkServerStatus();
+
+
+      if (!data) {
+        return;
+      }
+
+
+      const training =
+        data.training || {};
+
+
+      if (
+        training.running
+      ) {
+
+        trainingRunning =
+          true;
+
+        updateButtons();
+
+        showProgress(
+          training.progress || 0,
+          training.message ||
+          "Training läuft…"
+        );
+
+
+        startTrainingPolling();
+
+      } else {
+
+        await checkModelStatus();
+
+        updateButtons();
+      }
+
+    })();
+
   </script>
+
 </body>
 </html>
 ```
