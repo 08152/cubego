@@ -24,11 +24,6 @@ if (parentPort) {
     });
 }
 
-
-/* =========================================================
-   HILFSFUNKTIONEN
-   ========================================================= */
-
 function send(type, data = {}) {
     if (parentPort) {
         parentPort.postMessage({
@@ -46,31 +41,18 @@ function atomicWrite(file, data) {
         "-" +
         Date.now();
 
-    fs.writeFileSync(
-        temp,
-        data,
-        "utf8"
-    );
-
-    fs.renameSync(
-        temp,
-        file
-    );
+    fs.writeFileSync(temp, data, "utf8");
+    fs.renameSync(temp, file);
 }
 
 function readJSON(file) {
     return JSON.parse(
-        fs.readFileSync(
-            file,
-            "utf8"
-        )
+        fs.readFileSync(file, "utf8")
     );
 }
 
 function sleep(ms) {
-    return new Promise(
-        resolve => setTimeout(resolve, ms)
-    );
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 
@@ -95,19 +77,12 @@ const ANSWER_KEYS = [
 ];
 
 function findKey(object, keys) {
-    if (
-        !object ||
-        typeof object !== "object"
-    ) {
+    if (!object || typeof object !== "object") {
         return null;
     }
 
     for (const key of Object.keys(object)) {
-        if (
-            keys.includes(
-                key.toLowerCase()
-            )
-        ) {
+        if (keys.includes(key.toLowerCase())) {
             return key;
         }
     }
@@ -118,33 +93,20 @@ function findKey(object, keys) {
 function collectExamples(value, output) {
     if (Array.isArray(value)) {
         for (const item of value) {
-            collectExamples(
-                item,
-                output
-            );
+            collectExamples(item, output);
         }
-
         return;
     }
 
-    if (
-        !value ||
-        typeof value !== "object"
-    ) {
+    if (!value || typeof value !== "object") {
         return;
     }
 
     const questionKey =
-        findKey(
-            value,
-            QUESTION_KEYS
-        );
+        findKey(value, QUESTION_KEYS);
 
     const answerKey =
-        findKey(
-            value,
-            ANSWER_KEYS
-        );
+        findKey(value, ANSWER_KEYS);
 
     if (
         questionKey &&
@@ -158,10 +120,7 @@ function collectExamples(value, output) {
         const answer =
             value[answerKey].trim();
 
-        if (
-            question &&
-            answer
-        ) {
+        if (question && answer) {
             output.push({
                 question,
                 answer
@@ -170,10 +129,7 @@ function collectExamples(value, output) {
     }
 
     for (const key of Object.keys(value)) {
-        collectExamples(
-            value[key],
-            output
-        );
+        collectExamples(value[key], output);
     }
 }
 
@@ -190,65 +146,55 @@ function collectTexts(value, output) {
 
     if (Array.isArray(value)) {
         for (const item of value) {
-            collectTexts(
-                item,
-                output
-            );
+            collectTexts(item, output);
         }
 
         return;
     }
 
-    if (
-        value &&
-        typeof value === "object"
-    ) {
+    if (value && typeof value === "object") {
         for (const key of Object.keys(value)) {
-            collectTexts(
-                value[key],
-                output
-            );
+            collectTexts(value[key], output);
         }
     }
 }
 
 function getDataFiles() {
     if (!fs.existsSync(DATEN)) {
-        fs.mkdirSync(
-            DATEN,
-            {
-                recursive: true
-            }
-        );
+        fs.mkdirSync(DATEN, {
+            recursive: true
+        });
 
         return [];
     }
 
-    return fs.readdirSync(
-        DATEN,
-        {
-            withFileTypes: true
+    return fs.readdirSync(DATEN, {
+        withFileTypes: true
+    })
+    .filter(entry => {
+        if (!entry.isFile()) {
+            return false;
         }
-    )
-    .filter(
-        entry =>
-            entry.isFile() &&
+
+        const lower =
+            entry.name.toLowerCase();
+
+        return (
+            lower.endsWith(".json") ||
+            lower.endsWith(".jsonl") ||
+            lower.endsWith(".txt")
+        );
+    })
+    .map(entry =>
+        path.join(
+            DATEN,
             entry.name
-                .toLowerCase()
-                .endsWith(".json")
-    )
-    .map(
-        entry =>
-            path.join(
-                DATEN,
-                entry.name
-            )
+        )
     );
 }
 
 function loadTrainingData() {
-    const files =
-        getDataFiles();
+    const files = getDataFiles();
 
     const examples = [];
     const texts = [];
@@ -259,7 +205,7 @@ function loadTrainingData() {
             break;
         }
 
-        let raw;
+        let raw = "";
 
         try {
             raw =
@@ -288,10 +234,7 @@ function loadTrainingData() {
                 localExamples
             );
 
-            for (
-                const example of
-                localExamples
-            ) {
+            for (const example of localExamples) {
                 const id =
                     example.question +
                     "\n" +
@@ -299,10 +242,7 @@ function loadTrainingData() {
 
                 if (!seen.has(id)) {
                     seen.add(id);
-
-                    examples.push(
-                        example
-                    );
+                    examples.push(example);
                 }
             }
 
@@ -320,19 +260,12 @@ function loadTrainingData() {
         }
     }
 
-    /*
-     * Falls die JSON-Dateien keine
-     * Frage/Antwort-Struktur besitzen.
-     */
-
     if (
         examples.length === 0 &&
         texts.length > 0
     ) {
         for (const text of texts) {
-            if (
-                text.length >= 4
-            ) {
+            if (text.length >= 4) {
                 examples.push({
                     question:
                         "Erzähle etwas über dieses Thema.",
@@ -355,7 +288,7 @@ function loadTrainingData() {
    TOKENIZER
    ========================================================= */
 
-function loadTokenizerClass() {
+function loadTokenizerModule() {
     const file =
         path.join(
             ROOT,
@@ -364,98 +297,108 @@ function loadTokenizerClass() {
 
     if (!fs.existsSync(file)) {
         throw new Error(
-            "tokenizer.js fehlt."
+            "tokenizer.js fehlt: " + file
         );
     }
 
-    const module =
+    delete require.cache[
+        require.resolve(file)
+    ];
+
+    const loaded =
         require(file);
 
-    const Tokenizer =
-        module.AdvancedTokenizer ||
-        module;
-
-    if (
-        typeof Tokenizer !==
-        "function"
-    ) {
+    if (!loaded) {
         throw new Error(
-            "AdvancedTokenizer konnte nicht geladen werden."
+            "tokenizer.js hat keinen Export."
         );
     }
 
-    return Tokenizer;
+    return loaded;
+}
+
+function getTokenizerFactory() {
+    const loaded =
+        loadTokenizerModule();
+
+    const AdvancedTokenizer =
+        loaded.AdvancedTokenizer ||
+        loaded.default ||
+        loaded;
+
+    if (
+        AdvancedTokenizer &&
+        typeof AdvancedTokenizer.create ===
+        "function"
+    ) {
+        return AdvancedTokenizer;
+    }
+
+    if (
+        typeof AdvancedTokenizer ===
+        "function"
+    ) {
+        return {
+            create() {
+                return new AdvancedTokenizer();
+            }
+        };
+    }
+
+    throw new Error(
+        "AdvancedTokenizer konnte nicht geladen werden. " +
+        "Erwartet wurde AdvancedTokenizer.create()."
+    );
 }
 
 function createTokenizer() {
-    const Tokenizer =
-        loadTokenizerClass();
+    const AdvancedTokenizer =
+        getTokenizerFactory();
 
     let tokenizer = null;
 
-    /*
-     * Bereits trainierter Tokenizer.
-     */
-
-    if (
-        fs.existsSync(
-            TOKENIZER_FILE
-        )
-    ) {
+    if (fs.existsSync(TOKENIZER_FILE)) {
         try {
             const saved =
                 readJSON(
                     TOKENIZER_FILE
                 );
 
+            tokenizer =
+                AdvancedTokenizer.create();
+
             if (
-                typeof Tokenizer.fromJSON ===
+                typeof tokenizer.import ===
+                "function"
+            ) {
+                tokenizer.import(saved);
+            } else if (
+                typeof tokenizer.fromJSON ===
                 "function"
             ) {
                 tokenizer =
-                    Tokenizer.fromJSON(
-                        saved
-                    );
-            } else {
-                tokenizer =
-                    new Tokenizer();
-
-                if (
-                    typeof tokenizer.import ===
-                    "function"
-                ) {
-                    tokenizer.import(
-                        saved
-                    );
-                }
+                    tokenizer.fromJSON(saved);
             }
+
         } catch (error) {
             console.warn(
                 "Gespeicherter Tokenizer konnte nicht geladen werden:",
                 error.message
             );
+
+            tokenizer = null;
         }
     }
 
     if (!tokenizer) {
         tokenizer =
-            new Tokenizer({
-                vocabSize:
-                    OPTIONS.vocabSize ||
-                    8192,
+            AdvancedTokenizer.create();
+    }
 
-                minFrequency:
-                    OPTIONS.minFrequency ||
-                    2,
-
-                maxTokenLength:
-                    OPTIONS.maxTokenLength ||
-                    64,
-
-                maxMerges:
-                    OPTIONS.maxMerges ||
-                    16000
-            });
+    if (!tokenizer) {
+        throw new Error(
+            "Tokenizer konnte nicht erstellt werden."
+        );
     }
 
     return tokenizer;
@@ -470,47 +413,45 @@ async function trainTokenizer(
     tokenizer,
     examples
 ) {
-    if (
-        stopRequested
-    ) {
+    if (stopRequested) {
         return tokenizer;
     }
 
-    /*
-     * Falls tokenizer.train existiert,
-     * wird der gesamte Text verwendet.
-     */
+    const texts =
+        examples.map(example =>
+            "<|user|>\n" +
+            example.question +
+            "\n<|end|>\n" +
+            "<|assistant|>\n" +
+            example.answer +
+            "\n<|end|>"
+        );
 
     if (
         typeof tokenizer.train ===
         "function"
     ) {
-        const texts =
-            examples.map(
-                example =>
-                    "<|user|>\n" +
-                    example.question +
-                    "\n<|end|>\n" +
-                    "<|assistant|>\n" +
-                    example.answer +
-                    "\n<|end|>"
-            );
-
         try {
             await tokenizer.train(
                 texts
             );
         } catch (error) {
-            /*
-             * Manche Versionen erwarten
-             * andere Parameter.
-             *
-             * Der bereits vorhandene
-             * Tokenizer bleibt trotzdem
-             * verwendbar.
-             */
             console.warn(
                 "Tokenizer-Training:",
+                error.message
+            );
+        }
+    } else if (
+        typeof tokenizer.trainBPE ===
+        "function"
+    ) {
+        try {
+            await tokenizer.trainBPE(
+                texts
+            );
+        } catch (error) {
+            console.warn(
+                "Tokenizer-BPE-Training:",
                 error.message
             );
         }
@@ -524,10 +465,8 @@ async function trainTokenizer(
    TOKENIZER SPEICHERN
    ========================================================= */
 
-function exportTokenizer(
-    tokenizer
-) {
-    let data = null;
+function exportTokenizer(tokenizer) {
+    let data;
 
     if (
         typeof tokenizer.export ===
@@ -542,8 +481,9 @@ function exportTokenizer(
         data =
             tokenizer.toJSON();
     } else {
-        data =
-            tokenizer;
+        throw new Error(
+            "Tokenizer besitzt keine export()- oder toJSON()-Funktion."
+        );
     }
 
     atomicWrite(
@@ -574,12 +514,14 @@ function loadModelClass() {
         );
     }
 
-    const module =
+    const loaded =
         require(file);
 
     const Model =
-        module.LanguageModel ||
-        module.LargeLanguageModel;
+        loaded.LanguageModel ||
+        loaded.LargeLanguageModel ||
+        loaded.default ||
+        loaded;
 
     if (
         typeof Model !==
@@ -593,14 +535,7 @@ function loadModelClass() {
     return Model;
 }
 
-
-/* =========================================================
-   MODELL-KONFIGURATION
-   ========================================================= */
-
-function createModelConfig(
-    tokenizer
-) {
+function createModelConfig(tokenizer) {
     const vocabSize =
         Number(
             tokenizer.vocabSize ||
@@ -608,13 +543,6 @@ function createModelConfig(
             OPTIONS.vocabSize ||
             8192
         );
-
-    /*
-     * Standardmäßig ein kleineres Modell,
-     * damit reines JavaScript auf einem
-     * normalen Windows-PC überhaupt
-     * sinnvoll starten kann.
-     */
 
     return {
         vocabSize,
@@ -657,8 +585,7 @@ function createModelConfig(
 
         dropout: 0,
 
-        rmsEpsilon:
-            0.00001,
+        rmsEpsilon: 0.00001,
 
         learningRate:
             Number(
@@ -666,40 +593,19 @@ function createModelConfig(
                 0.0003
             ),
 
-        beta1:
-            0.9,
+        beta1: 0.9,
+        beta2: 0.95,
+        weightDecay: 0.01,
+        gradientClip: 1.0,
 
-        beta2:
-            0.95,
-
-        weightDecay:
-            0.01,
-
-        gradientClip:
-            1.0,
-
-        temperature:
-            0.85,
-
-        topK:
-            40,
-
-        topP:
-            0.92,
-
-        repetitionPenalty:
-            1.08
+        temperature: 0.85,
+        topK: 40,
+        topP: 0.92,
+        repetitionPenalty: 1.08
     };
 }
 
-
-/* =========================================================
-   MODELL ERSTELLEN / LADEN
-   ========================================================= */
-
-function createModel(
-    tokenizer
-) {
+function createModel(tokenizer) {
     const Model =
         loadModelClass();
 
@@ -708,25 +614,14 @@ function createModel(
             tokenizer
         );
 
-    /*
-     * Bestehende Konfiguration
-     * bevorzugen.
-     */
-
-    if (
-        fs.existsSync(
-            CONFIG_FILE
-        )
-    ) {
+    if (fs.existsSync(CONFIG_FILE)) {
         try {
             const saved =
                 readJSON(
                     CONFIG_FILE
                 );
 
-            if (
-                saved.model
-            ) {
+            if (saved.model) {
                 config =
                     Object.assign(
                         {},
@@ -734,14 +629,8 @@ function createModel(
                         saved.model
                     );
             }
-
         } catch {}
     }
-
-    /*
-     * Vom Startbefehl übergebene
-     * Werte überschreiben die Datei.
-     */
 
     const overrideKeys = [
         "vocabSize",
@@ -755,10 +644,7 @@ function createModel(
         "gradientClip"
     ];
 
-    for (
-        const key of
-        overrideKeys
-    ) {
+    for (const key of overrideKeys) {
         if (
             OPTIONS[key] !==
             undefined
@@ -769,19 +655,9 @@ function createModel(
     }
 
     const model =
-        new Model(
-            config
-        );
+        new Model(config);
 
-    /*
-     * Bereits gelerntes Modell laden.
-     */
-
-    if (
-        fs.existsSync(
-            MODEL_FILE
-        )
-    ) {
+    if (fs.existsSync(MODEL_FILE)) {
         try {
             const saved =
                 readJSON(
@@ -792,11 +668,8 @@ function createModel(
                 typeof model.load ===
                 "function"
             ) {
-                model.load(
-                    saved
-                );
+                model.load(saved);
             }
-
         } catch (error) {
             console.warn(
                 "Altes Modell konnte nicht geladen werden:",
@@ -813,12 +686,10 @@ function createModel(
 
 
 /* =========================================================
-   TRAININGSBEISPIELE
+   SEQUENZEN
    ========================================================= */
 
-function formatExample(
-    example
-) {
+function formatExample(example) {
     return (
         "<|user|>\n" +
         example.question +
@@ -829,7 +700,6 @@ function formatExample(
     );
 }
 
-
 function makeSequences(
     tokenizer,
     examples,
@@ -837,13 +707,8 @@ function makeSequences(
 ) {
     const sequences = [];
 
-    for (
-        const example of
-        examples
-    ) {
-        if (
-            stopRequested
-        ) {
+    for (const example of examples) {
+        if (stopRequested) {
             break;
         }
 
@@ -856,10 +721,12 @@ function makeSequences(
 
         try {
             tokens =
-                tokenizer.encode(
-                    text
-                );
-        } catch {
+                tokenizer.encode(text);
+        } catch (error) {
+            console.warn(
+                "Tokenisierung fehlgeschlagen:",
+                error.message
+            );
             continue;
         }
 
@@ -871,13 +738,9 @@ function makeSequences(
         }
 
         const list =
-            Array.from(
-                tokens
-            );
+            Array.from(tokens);
 
-        if (
-            list.length < 2
-        ) {
+        if (list.length < 2) {
             continue;
         }
 
@@ -885,42 +748,33 @@ function makeSequences(
             list.length <=
             sequenceLength
         ) {
-            sequences.push(
-                list
-            );
-
+            sequences.push(list);
             continue;
         }
 
-        /*
-         * Lange Beispiele werden
-         * in mehrere Abschnitte geteilt.
-         */
+        const step =
+            Math.max(
+                1,
+                sequenceLength - 16
+            );
 
         for (
             let start = 0;
             start < list.length;
-            start += sequenceLength - 16
+            start += step
         ) {
-            if (
-                stopRequested
-            ) {
+            if (stopRequested) {
                 break;
             }
 
             const part =
                 list.slice(
                     start,
-                    start +
-                    sequenceLength
+                    start + sequenceLength
                 );
 
-            if (
-                part.length >= 2
-            ) {
-                sequences.push(
-                    part
-                );
+            if (part.length >= 2) {
+                sequences.push(part);
             }
         }
     }
@@ -960,9 +814,7 @@ async function trainModel(
             0.0003
         );
 
-    if (
-        model.config
-    ) {
+    if (model.config) {
         model.config.learningRate =
             learningRate;
     }
@@ -972,26 +824,18 @@ async function trainModel(
         epoch <= epochs;
         epoch++
     ) {
-        if (
-            stopRequested
-        ) {
+        if (stopRequested) {
             break;
         }
 
-        /*
-         * Zufällige Reihenfolge.
-         */
-
         const order =
-            sequences
-                .map(
-                    (_, index) =>
-                        index
-                );
+            sequences.map(
+                (_, index) =>
+                    index
+            );
 
         for (
-            let i =
-                order.length - 1;
+            let i = order.length - 1;
             i > 0;
             i--
         ) {
@@ -1004,8 +848,7 @@ async function trainModel(
             [
                 order[i],
                 order[j]
-            ] =
-            [
+            ] = [
                 order[j],
                 order[i]
             ];
@@ -1013,13 +856,10 @@ async function trainModel(
 
         for (
             let position = 0;
-            position <
-            order.length;
+            position < order.length;
             position++
         ) {
-            if (
-                stopRequested
-            ) {
+            if (stopRequested) {
                 break;
             }
 
@@ -1028,22 +868,15 @@ async function trainModel(
                     order[position]
                 ];
 
-            if (
-                sequence.length < 2
-            ) {
+            if (sequence.length < 2) {
                 continue;
             }
 
             const input =
-                sequence.slice(
-                    0,
-                    -1
-                );
+                sequence.slice(0, -1);
 
             const target =
-                sequence.slice(
-                    1
-                );
+                sequence.slice(1);
 
             try {
                 let result;
@@ -1060,7 +893,6 @@ async function trainModel(
                                 learningRate
                             }
                         );
-
                 } else {
                     result =
                         model.trainBackprop(
@@ -1076,9 +908,7 @@ async function trainModel(
                     typeof result ===
                     "number"
                 ) {
-                    lastLoss =
-                        result;
-
+                    lastLoss = result;
                 } else if (
                     result &&
                     typeof result.loss ===
@@ -1097,57 +927,36 @@ async function trainModel(
 
             globalStep++;
 
-
-            /*
-             * Fortschritt regelmäßig an
-             * server.js schicken.
-             */
-
-            if (
-                globalStep % 5 === 0
-            ) {
+            if (globalStep % 5 === 0) {
                 send(
                     "progress",
                     {
                         epoch,
-                        step:
-                            globalStep,
-                        loss:
-                            lastLoss
+                        step: globalStep,
+                        loss: lastLoss
                     }
                 );
 
-                /*
-                 * Worker kurz Luft geben.
-                 */
                 await sleep(0);
             }
         }
-
-        /*
-         * Nach jeder Epoche speichern.
-         */
 
         saveModel(
             model,
             tokenizer,
             {
                 epoch,
-                step:
-                    globalStep,
-                loss:
-                    lastLoss
+                step: globalStep,
+                loss: lastLoss
             }
         );
 
         send(
-            "progress",
+            "epoch",
             {
                 epoch,
-                step:
-                    globalStep,
-                loss:
-                    lastLoss
+                step: globalStep,
+                loss: lastLoss
             }
         );
     }
@@ -1162,22 +971,17 @@ async function trainModel(
                 )
             ),
 
-        step:
-            globalStep,
-
-        loss:
-            lastLoss
+        step: globalStep,
+        loss: lastLoss
     };
 }
 
 
 /* =========================================================
-   MODELL SPEICHERN
+   SPEICHERN
    ========================================================= */
 
-function serializeModel(
-    model
-) {
+function serializeModel(model) {
     if (
         typeof model.toJSON ===
         "function"
@@ -1204,7 +1008,6 @@ function serializeModel(
     );
 }
 
-
 function saveModel(
     model,
     tokenizer,
@@ -1213,67 +1016,41 @@ function saveModel(
     fs.mkdirSync(
         GELERNT,
         {
-            recursive:
-                true
+            recursive: true
         }
     );
 
-
-    /*
-     * Modell
-     */
-
     const modelData =
-        serializeModel(
-            model
-        );
+        serializeModel(model);
 
     atomicWrite(
         MODEL_FILE,
-        JSON.stringify(
-            modelData
-        )
+        JSON.stringify(modelData)
     );
 
+    exportTokenizer(tokenizer);
 
-    /*
-     * Tokenizer
-     */
+    const config = {
+        version: 1,
 
-    exportTokenizer(
-        tokenizer
-    );
+        updatedAt:
+            new Date().toISOString(),
 
+        model:
+            model.config || {},
 
-    /*
-     * Konfiguration
-     */
+        training: {
+            learningRate:
+                OPTIONS.learningRate ||
+                model.config?.learningRate ||
+                0.0003,
 
-    const config =
-        {
-            version: 1,
-
-            updatedAt:
-                new Date()
-                    .toISOString(),
-
-            model:
-                model.config ||
-                {},
-
-            training: {
-                learningRate:
-                    OPTIONS.learningRate ||
-                    model.config?.learningRate ||
-                    0.0003,
-
-                contextSize:
-                    OPTIONS.contextSize ||
-                    model.config?.contextSize ||
-                    256
-            }
-        };
-
+            contextSize:
+                OPTIONS.contextSize ||
+                model.config?.contextSize ||
+                256
+        }
+    };
 
     atomicWrite(
         CONFIG_FILE,
@@ -1284,41 +1061,30 @@ function saveModel(
         )
     );
 
+    const trainingState = {
+        version: 1,
 
-    /*
-     * Trainingszustand
-     */
+        epoch:
+            state.epoch,
 
-    const trainingState =
-        {
-            version: 1,
+        step:
+            state.step,
 
-            epoch:
-                state.epoch,
+        loss:
+            state.loss,
 
-            step:
-                state.step,
+        sourceFolder:
+            DATEN,
 
-            loss:
-                state.loss,
+        sourceFiles:
+            getDataFiles().map(
+                file =>
+                    path.basename(file)
+            ),
 
-            sourceFolder:
-                DATEN,
-
-            sourceFiles:
-                getDataFiles()
-                    .map(
-                        file =>
-                            path.basename(
-                                file
-                            )
-                    ),
-
-            updatedAt:
-                new Date()
-                    .toISOString()
-        };
-
+        updatedAt:
+            new Date().toISOString()
+    };
 
     atomicWrite(
         STATE_FILE,
@@ -1340,45 +1106,30 @@ async function main() {
         fs.mkdirSync(
             GELERNT,
             {
-                recursive:
-                    true
+                recursive: true
             }
         );
-
 
         send(
-            "progress",
+            "started",
             {
-                phase:
-                    "daten",
-                epoch:
-                    0,
-                step:
-                    0,
-                loss:
-                    null
+                phase: "daten"
             }
         );
-
 
         const dataset =
             loadTrainingData();
 
-
-        if (
-            stopRequested
-        ) {
+        if (stopRequested) {
             send(
-                "finished",
+                "stopped",
                 {
-                    stopped:
-                        true
+                    message:
+                        "Training gestoppt."
                 }
             );
-
             return;
         }
-
 
         if (
             dataset.examples.length ===
@@ -1389,56 +1140,42 @@ async function main() {
             );
         }
 
-
         send(
             "progress",
             {
-                phase:
-                    "tokenizer",
+                phase: "tokenizer",
                 examples:
                     dataset.examples.length
             }
         );
 
-
         const tokenizer =
             createTokenizer();
-
 
         await trainTokenizer(
             tokenizer,
             dataset.examples
         );
 
+        exportTokenizer(tokenizer);
 
-        exportTokenizer(
-            tokenizer
-        );
-
-
-        if (
-            stopRequested
-        ) {
+        if (stopRequested) {
             send(
-                "finished",
+                "stopped",
                 {
-                    stopped:
-                        true
+                    message:
+                        "Training gestoppt."
                 }
             );
-
             return;
         }
-
 
         send(
             "progress",
             {
-                phase:
-                    "sequenzen"
+                phase: "sequenzen"
             }
         );
-
 
         const sequenceLength =
             Number(
@@ -1446,14 +1183,12 @@ async function main() {
                 256
             );
 
-
         const sequences =
             makeSequences(
                 tokenizer,
                 dataset.examples,
                 sequenceLength
             );
-
 
         if (
             sequences.length ===
@@ -1464,17 +1199,14 @@ async function main() {
             );
         }
 
-
         send(
             "progress",
             {
-                phase:
-                    "modell",
+                phase: "modell",
                 sequences:
                     sequences.length
             }
         );
-
 
         const {
             model,
@@ -1484,13 +1216,6 @@ async function main() {
             tokenizer
         );
 
-
-        /*
-         * Config sofort sichern,
-         * damit das Modell beim nächsten
-         * Start dieselbe Architektur besitzt.
-         */
-
         atomicWrite(
             CONFIG_FILE,
             JSON.stringify(
@@ -1498,11 +1223,9 @@ async function main() {
                     version: 1,
 
                     updatedAt:
-                        new Date()
-                            .toISOString(),
+                        new Date().toISOString(),
 
-                    model:
-                        config,
+                    model: config,
 
                     training: {
                         learningRate:
@@ -1516,7 +1239,6 @@ async function main() {
             )
         );
 
-
         const epochs =
             Math.max(
                 1,
@@ -1526,25 +1248,18 @@ async function main() {
                 )
             );
 
-
         send(
             "progress",
             {
-                phase:
-                    "training",
-                epoch:
-                    0,
-                step:
-                    0,
-                loss:
-                    null,
-                totalEpochs:
-                    epochs,
+                phase: "training",
+                epoch: 0,
+                step: 0,
+                loss: null,
+                totalEpochs: epochs,
                 sequences:
                     sequences.length
             }
         );
-
 
         const result =
             await trainModel(
@@ -1554,38 +1269,49 @@ async function main() {
                 epochs
             );
 
-
-        /*
-         * Auch nach einem Stop
-         * letzten Zustand speichern.
-         */
-
         saveModel(
             model,
             tokenizer,
             result
         );
 
+        if (stopRequested) {
+            send(
+                "stopped",
+                {
+                    epoch:
+                        result.epoch,
 
-        send(
-            "finished",
-            {
-                stopped:
-                    stopRequested,
+                    step:
+                        result.step,
 
-                epoch:
-                    result.epoch,
+                    loss:
+                        result.loss,
 
-                step:
-                    result.step,
+                    message:
+                        "Training gestoppt."
+                }
+            );
+        } else {
+            send(
+                "finished",
+                {
+                    epoch:
+                        result.epoch,
 
-                loss:
-                    result.loss
-            }
-        );
+                    step:
+                        result.step,
+
+                    loss:
+                        result.loss,
+
+                    message:
+                        "Training abgeschlossen."
+                }
+            );
+        }
 
     } catch (error) {
-
         console.error(
             "TRAIN-WORKER FEHLER:",
             error
@@ -1603,6 +1329,5 @@ async function main() {
         );
     }
 }
-
 
 main();
