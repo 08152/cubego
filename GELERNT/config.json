@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "name": "LUMORA",
+  "updatedAt": "2026-10-05T11:54:18.446Z",
+  "model": {
+    "vocabSize": 74,
+    "contextSize": 32,
+    "embeddingSize": 32,
+    "layers": 1,
+    "heads": 1,
+    "headSize": 32,
+    "feedForwardSize": 64,
+    "dropout": 0,
+    "rmsEpsilon": 0.00001,
+    "learningRate": 0.0003,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "weightDecay": 0.01,
+    "gradientClip": 1,
+    "temperature": 0.8,
+    "topK": 20,
+    "topP": 0.9,
+    "repetitionPenalty": 1.08
+  },
+  "training": {
+    "epochs": 1,
+    "sequenceLength": 32,
+    "learningRate": 0.0003
+  }
+}
