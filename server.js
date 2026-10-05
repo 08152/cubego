@@ -7,6 +7,7 @@ const https = require("https");
 const { Worker } = require("worker_threads");
 
 const ROOT = __dirname;
+
 const DATA_DIR = path.join(ROOT, "DATEN");
 const LEARNED_DIR = path.join(ROOT, "GELERNT");
 
@@ -51,7 +52,8 @@ let trainingState = {
     step: 0,
     loss: null,
     totalEpochs: 0,
-    message: "Bereit."
+    message: "Bereit.",
+    github: null
 };
 
 let generationState = {
@@ -68,11 +70,21 @@ let generationState = {
    ========================================================= */
 
 function json(res, status, data) {
-    const body = JSON.stringify(
-        data,
-        null,
-        2
-    );
+    let body;
+
+    try {
+        body = JSON.stringify(
+            data,
+            null,
+            2
+        );
+    } catch (error) {
+        body = JSON.stringify({
+            success: false,
+            error: "Antwort konnte nicht als JSON erstellt werden.",
+            details: error.message
+        });
+    }
 
     res.writeHead(
         status,
@@ -112,7 +124,7 @@ function text(res, status, value) {
         }
     );
 
-    res.end(value);
+    res.end(String(value));
 }
 
 function sendError(
@@ -139,23 +151,32 @@ function readBody(req) {
     return new Promise(
         (resolve, reject) => {
             let body = "";
+            let finished = false;
 
             req.on(
                 "data",
                 chunk => {
+                    if (finished) {
+                        return;
+                    }
+
                     body += chunk;
 
                     if (
                         body.length >
                         10 * 1024 * 1024
                     ) {
+                        finished = true;
+
                         reject(
                             new Error(
                                 "Request zu groß."
                             )
                         );
 
-                        req.destroy();
+                        try {
+                            req.destroy();
+                        } catch {}
                     }
                 }
             );
@@ -163,6 +184,12 @@ function readBody(req) {
             req.on(
                 "end",
                 () => {
+                    if (finished) {
+                        return;
+                    }
+
+                    finished = true;
+
                     if (!body) {
                         resolve({});
                         return;
@@ -170,11 +197,9 @@ function readBody(req) {
 
                     try {
                         resolve(
-                            JSON.parse(
-                                body
-                            )
+                            JSON.parse(body)
                         );
-                    } catch {
+                    } catch (error) {
                         reject(
                             new Error(
                                 "Ungültiges JSON."
@@ -186,7 +211,14 @@ function readBody(req) {
 
             req.on(
                 "error",
-                reject
+                error => {
+                    if (finished) {
+                        return;
+                    }
+
+                    finished = true;
+                    reject(error);
+                }
             );
         }
     );
@@ -200,7 +232,10 @@ function fileExists(file) {
     }
 }
 
-function readJSON(file, fallback = null) {
+function readJSON(
+    file,
+    fallback = null
+) {
     try {
         return JSON.parse(
             fs.readFileSync(
@@ -268,9 +303,7 @@ function githubRequest(
             const payload =
                 body === null
                     ? null
-                    : JSON.stringify(
-                          body
-                      );
+                    : JSON.stringify(body);
 
             const options = {
                 hostname:
@@ -286,7 +319,7 @@ function githubRequest(
 
                 headers: {
                     "User-Agent":
-                        "LUMORA",
+                        "CubeGo",
 
                     "Accept":
                         "application/vnd.github+json",
@@ -385,10 +418,10 @@ function githubRequest(
     );
 }
 
-async function getGitHubFile(
+function githubContentsPath(
     filePath
 ) {
-    const api =
+    return (
         "/repos/" +
         encodeURIComponent(
             GITHUB_OWNER
@@ -407,11 +440,48 @@ async function getGitHubFile(
         "?ref=" +
         encodeURIComponent(
             GITHUB_BRANCH
-        );
+        )
+    );
+}
 
+async function getGitHubFile(
+    filePath
+) {
     return githubRequest(
         "GET",
-        api
+        githubContentsPath(
+            filePath
+        )
+    );
+}
+
+async function downloadGitHubFile(
+    filePath
+) {
+    const result =
+        await getGitHubFile(
+            filePath
+        );
+
+    if (
+        !result ||
+        !result.content
+    ) {
+        throw new Error(
+            "GitHub-Datei enthält keinen Inhalt: " +
+            filePath
+        );
+    }
+
+    const clean =
+        result.content.replace(
+            /\s/g,
+            ""
+        );
+
+    return Buffer.from(
+        clean,
+        "base64"
     );
 }
 
@@ -460,7 +530,7 @@ async function uploadGitHubFile(
     const body = {
         message:
             message ||
-            "LUMORA: gelernte Dateien aktualisiert",
+            "CubeGo: gelernte Dateien aktualisiert",
 
         content:
             encoded,
@@ -480,10 +550,131 @@ async function uploadGitHubFile(
     );
 }
 
+
+/* =========================================================
+   GITHUB -> RENDER
+   ========================================================= */
+
+async function restoreLearnedFromGitHub() {
+    if (!GITHUB_TOKEN) {
+        console.log(
+            "[GITHUB] Kein GITHUB_TOKEN. Wiederherstellung übersprungen."
+        );
+
+        return {
+            success: false,
+            restored: [],
+            message:
+                "GITHUB_TOKEN fehlt."
+        };
+    }
+
+    const files = [
+        "model.json",
+        "tokenizer.json",
+        "config.json",
+        "training-state.json"
+    ];
+
+    const restored = [];
+    const missing = [];
+    const failed = [];
+
+    console.log(
+        "[GITHUB] Prüfe gespeichertes Modell..."
+    );
+
+    for (
+        const filename of files
+    ) {
+        const local =
+            path.join(
+                LEARNED_DIR,
+                filename
+            );
+
+        try {
+            const buffer =
+                await downloadGitHubFile(
+                    "GELERNT/" +
+                    filename
+                );
+
+            /*
+             * GitHub ist hier die dauerhafte Speicherung.
+             * Die Datei wird bei jedem Neustart aktualisiert,
+             * damit Render nicht mit einem alten/fehlenden
+             * lokalen Stand arbeitet.
+             */
+
+            fs.writeFileSync(
+                local,
+                buffer
+            );
+
+            restored.push(
+                filename
+            );
+
+            console.log(
+                "[GITHUB] Wiederhergestellt: " +
+                filename
+            );
+        } catch (error) {
+            if (
+                String(
+                    error.message
+                ).includes("404")
+            ) {
+                missing.push(
+                    filename
+                );
+
+                console.log(
+                    "[GITHUB] Nicht vorhanden: " +
+                    filename
+                );
+            } else {
+                failed.push({
+                    file:
+                        filename,
+
+                    error:
+                        error.message
+                });
+
+                console.error(
+                    "[GITHUB] Fehler bei " +
+                    filename +
+                    ": " +
+                    error.message
+                );
+            }
+        }
+    }
+
+    return {
+        success:
+            failed.length === 0,
+
+        restored,
+
+        missing,
+
+        failed
+    };
+}
+
+
+/* =========================================================
+   RENDER -> GITHUB
+   ========================================================= */
+
 async function syncLearnedToGitHub() {
     if (!GITHUB_TOKEN) {
         return {
             success: false,
+            uploaded: [],
             message:
                 "GITHUB_TOKEN fehlt."
         };
@@ -497,40 +688,73 @@ async function syncLearnedToGitHub() {
     ];
 
     const uploaded = [];
+    const failed = [];
 
-    for (const filename of files) {
+    for (
+        const filename of files
+    ) {
         const local =
             path.join(
                 LEARNED_DIR,
                 filename
             );
 
-        if (!fileExists(local)) {
+        if (
+            !fileExists(local)
+        ) {
             continue;
         }
 
-        const buffer =
-            fs.readFileSync(
-                local
-            );
+        try {
+            const buffer =
+                fs.readFileSync(
+                    local
+                );
 
-        await uploadGitHubFile(
-            "GELERNT/" +
+            await uploadGitHubFile(
+                "GELERNT/" +
                 filename,
-            buffer,
-            "LUMORA: " +
+
+                buffer,
+
+                "CubeGo: " +
                 filename +
                 " aktualisiert"
-        );
+            );
 
-        uploaded.push(
-            filename
-        );
+            uploaded.push(
+                filename
+            );
+
+            console.log(
+                "[GITHUB] Hochgeladen: " +
+                filename
+            );
+        } catch (error) {
+            failed.push({
+                file:
+                    filename,
+
+                error:
+                    error.message
+            });
+
+            console.error(
+                "[GITHUB] Upload-Fehler bei " +
+                filename +
+                ": " +
+                error.message
+            );
+        }
     }
 
     return {
-        success: true,
-        uploaded
+        success:
+            failed.length === 0,
+
+        uploaded,
+
+        failed
     };
 }
 
@@ -556,11 +780,19 @@ function getModelStatus() {
                 CONFIG_FILE
             ),
 
+        state:
+            fileExists(
+                STATE_FILE
+            ),
+
         modelFile:
             MODEL_FILE,
 
         tokenizerFile:
-            TOKENIZER_FILE
+            TOKENIZER_FILE,
+
+        configFile:
+            CONFIG_FILE
     };
 }
 
@@ -569,7 +801,7 @@ function getStatus() {
         success: true,
 
         name:
-            "LUMORA",
+            "CubeGo",
 
         online:
             true,
@@ -623,6 +855,12 @@ function getStatus() {
 function startTraining(
     payload
 ) {
+    payload =
+        payload &&
+        typeof payload === "object"
+            ? payload
+            : {};
+
     if (trainingWorker) {
         return {
             success: false,
@@ -631,9 +869,11 @@ function startTraining(
         };
     }
 
-    if (!fileExists(
-        TRAIN_WORKER
-    )) {
+    if (
+        !fileExists(
+            TRAIN_WORKER
+        )
+    ) {
         return {
             success: false,
             message:
@@ -641,63 +881,230 @@ function startTraining(
         };
     }
 
+    /*
+     * KLEINES MODELL
+     *
+     * Diese Werte sind absichtlich deutlich
+     * kleiner als die vorherigen Defaults.
+     *
+     * Dadurch sollte das Training auf Render
+     * wesentlich schneller laufen.
+     */
+
     const options = {
         epochs:
             Number(
-                payload.epochs ||
-                10
+                payload.epochs ??
+                1
             ),
 
         sequenceLength:
             Number(
-                payload.sequenceLength ||
-                256
+                payload.sequenceLength ??
+                16
             ),
 
         learningRate:
             Number(
-                payload.learningRate ||
+                payload.learningRate ??
                 0.0003
             ),
 
         contextSize:
             Number(
-                payload.contextSize ||
-                256
+                payload.contextSize ??
+                16
+            ),
+
+        embeddingSize:
+            Number(
+                payload.embeddingSize ??
+                32
+            ),
+
+        layers:
+            Number(
+                payload.layers ??
+                1
+            ),
+
+        heads:
+            Number(
+                payload.heads ??
+                1
+            ),
+
+        headSize:
+            Number(
+                payload.headSize ??
+                32
+            ),
+
+        feedForwardSize:
+            Number(
+                payload.feedForwardSize ??
+                64
             )
     };
 
+    /*
+     * Sicherheitsgrenzen gegen versehentlich
+     * riesige Trainingsparameter.
+     */
+
+    options.epochs =
+        Math.max(
+            1,
+            Math.min(
+                options.epochs,
+                100
+            )
+        );
+
+    options.sequenceLength =
+        Math.max(
+            4,
+            Math.min(
+                options.sequenceLength,
+                512
+            )
+        );
+
+    options.contextSize =
+        Math.max(
+            4,
+            Math.min(
+                options.contextSize,
+                512
+            )
+        );
+
+    options.embeddingSize =
+        Math.max(
+            8,
+            Math.min(
+                options.embeddingSize,
+                1024
+            )
+        );
+
+    options.layers =
+        Math.max(
+            1,
+            Math.min(
+                options.layers,
+                24
+            )
+        );
+
+    options.heads =
+        Math.max(
+            1,
+            Math.min(
+                options.heads,
+                24
+            )
+        );
+
+    options.headSize =
+        Math.max(
+            8,
+            Math.min(
+                options.headSize,
+                256
+            )
+        );
+
+    options.feedForwardSize =
+        Math.max(
+            16,
+            Math.min(
+                options.feedForwardSize,
+                4096
+            )
+        );
+
     trainingState = {
         running: true,
-        phase: "starting",
-        progress: 0,
-        epoch: 0,
-        step: 0,
-        loss: null,
+
+        phase:
+            "starting",
+
+        progress:
+            0,
+
+        epoch:
+            0,
+
+        step:
+            0,
+
+        loss:
+            null,
+
         totalEpochs:
             options.epochs,
+
         message:
-            "Training wird gestartet..."
+            "Training wird gestartet...",
+
+        options,
+
+        github:
+            null
     };
 
-    trainingWorker =
-        new Worker(
-            TRAIN_WORKER,
-            {
-                workerData: {
-                    root:
-                        ROOT,
+    console.log(
+        "[TRAIN] Starte Training mit:",
+        options
+    );
 
-                    daten:
-                        DATA_DIR,
+    try {
+        trainingWorker =
+            new Worker(
+                TRAIN_WORKER,
+                {
+                    workerData: {
+                        root:
+                            ROOT,
 
-                    gelernt:
-                        LEARNED_DIR,
+                        daten:
+                            DATA_DIR,
 
-                    options
+                        gelernt:
+                            LEARNED_DIR,
+
+                        options
+                    }
                 }
-            }
-        );
+            );
+    } catch (error) {
+        trainingWorker = null;
+
+        trainingState = {
+            ...trainingState,
+
+            running:
+                false,
+
+            phase:
+                "error",
+
+            message:
+                error.message,
+
+            error:
+                error.message
+        };
+
+        return {
+            success: false,
+            message:
+                "Training konnte nicht gestartet werden.",
+            error:
+                error.message
+        };
+    }
 
     trainingWorker.on(
         "message",
@@ -717,7 +1124,10 @@ function startTraining(
                         message,
                         {
                             running:
-                                true
+                                true,
+
+                            phase:
+                                "training"
                         }
                     );
 
@@ -793,12 +1203,27 @@ function startTraining(
                 trainingWorker =
                     null;
 
+                /*
+                 * Erst sicherstellen, dass die Dateien
+                 * vorhanden sind, danach zu GitHub sichern.
+                 */
+
                 try {
                     const github =
                         await syncLearnedToGitHub();
 
                     trainingState.github =
                         github;
+
+                    if (
+                        github.success
+                    ) {
+                        trainingState.message =
+                            "Training abgeschlossen und Modell zu GitHub gesichert.";
+                    } else {
+                        trainingState.message =
+                            "Training abgeschlossen, aber GitHub-Sicherung hatte Fehler.";
+                    }
                 } catch (error) {
                     trainingState.github = {
                         success:
@@ -807,11 +1232,12 @@ function startTraining(
                         message:
                             error.message
                     };
+
+                    trainingState.message =
+                        "Training abgeschlossen, aber GitHub-Sicherung fehlgeschlagen.";
                 }
 
-                if (
-                    worker
-                ) {
+                if (worker) {
                     try {
                         await worker.terminate();
                     } catch {}
@@ -872,7 +1298,8 @@ function startTraining(
                                 "error",
 
                             message:
-                                message.error,
+                                message.error ||
+                                "Unbekannter Trainingsfehler.",
 
                             error:
                                 message.error,
@@ -959,8 +1386,12 @@ function startTraining(
     );
 
     return {
-        success: true,
-        started: true,
+        success:
+            true,
+
+        started:
+            true,
+
         options
     };
 }
@@ -977,14 +1408,25 @@ async function stopTraining() {
     trainingState.message =
         "Training wird gestoppt...";
 
-    trainingWorker.postMessage({
-        type:
-            "stop"
-    });
+    try {
+        trainingWorker.postMessage({
+            type:
+                "stop"
+        });
+    } catch (error) {
+        return {
+            success: false,
+            message:
+                error.message
+        };
+    }
 
     return {
-        success: true,
-        stopping: true
+        success:
+            true,
+
+        stopping:
+            true
     };
 }
 
@@ -996,6 +1438,12 @@ async function stopTraining() {
 function startGeneration(
     payload
 ) {
+    payload =
+        payload &&
+        typeof payload === "object"
+            ? payload
+            : {};
+
     if (generateWorker) {
         return {
             success: false,
@@ -1004,13 +1452,27 @@ function startGeneration(
         };
     }
 
-    if (!fileExists(
-        GENERATE_WORKER
-    )) {
+    if (
+        !fileExists(
+            GENERATE_WORKER
+        )
+    ) {
         return {
             success: false,
             message:
                 "generate-worker.js wurde nicht gefunden."
+        };
+    }
+
+    if (
+        !fileExists(
+            MODEL_FILE
+        )
+    ) {
+        return {
+            success: false,
+            message:
+                "Noch kein trainiertes Modell vorhanden."
         };
     }
 
@@ -1029,32 +1491,65 @@ function startGeneration(
     }
 
     generationState = {
-        running: true,
-        text: "",
-        error: null,
+        running:
+            true,
+
+        text:
+            "",
+
+        error:
+            null,
+
         startedAt:
             new Date().toISOString(),
-        finishedAt: null
+
+        finishedAt:
+            null
     };
 
-    generateWorker =
-        new Worker(
-            GENERATE_WORKER,
-            {
-                workerData: {
-                    root:
-                        ROOT,
+    try {
+        generateWorker =
+            new Worker(
+                GENERATE_WORKER,
+                {
+                    workerData: {
+                        root:
+                            ROOT,
 
-                    gelernt:
-                        LEARNED_DIR,
+                        gelernt:
+                            LEARNED_DIR,
 
-                    prompt,
+                        prompt,
 
-                    options:
-                        payload || {}
+                        options:
+                            payload
+                    }
                 }
-            }
-        );
+            );
+    } catch (error) {
+        generateWorker = null;
+
+        generationState = {
+            ...generationState,
+
+            running:
+                false,
+
+            error:
+                error.message,
+
+            finishedAt:
+                new Date().toISOString()
+        };
+
+        return {
+            success: false,
+            message:
+                "Generation konnte nicht gestartet werden.",
+            error:
+                error.message
+        };
+    }
 
     generateWorker.on(
         "message",
@@ -1182,8 +1677,11 @@ function startGeneration(
     );
 
     return {
-        success: true,
-        started: true
+        success:
+            true,
+
+        started:
+            true
     };
 }
 
@@ -1196,14 +1694,25 @@ function stopGeneration() {
         };
     }
 
-    generateWorker.postMessage({
-        type:
-            "stop"
-    });
+    try {
+        generateWorker.postMessage({
+            type:
+                "stop"
+        });
+    } catch (error) {
+        return {
+            success: false,
+            message:
+                error.message
+        };
+    }
 
     return {
-        success: true,
-        stopping: true
+        success:
+            true,
+
+        stopping:
+            true
     };
 }
 
@@ -1243,18 +1752,19 @@ const server =
                     new URL(
                         req.url,
                         "http://" +
-                            (
-                                req.headers.host ||
-                                "localhost"
-                            )
+                        (
+                            req.headers.host ||
+                            "localhost"
+                        )
                     );
 
                 const pathname =
                     url.pathname;
 
-                /* -------------------------
-                   API
-                   ------------------------- */
+
+                /* =================================================
+                   GET API
+                   ================================================= */
 
                 if (
                     pathname ===
@@ -1474,15 +1984,16 @@ const server =
                     return;
                 }
 
-                /* -------------------------
-                   POST
-                   ------------------------- */
+
+                /* =================================================
+                   POST API
+                   ================================================= */
 
                 if (
                     req.method ===
-                    "POST" &&
+                        "POST" &&
                     pathname ===
-                    "/api/train/start"
+                        "/api/train/start"
                 ) {
                     const body =
                         await readBody(
@@ -1507,9 +2018,9 @@ const server =
 
                 if (
                     req.method ===
-                    "POST" &&
+                        "POST" &&
                     pathname ===
-                    "/api/train/stop"
+                        "/api/train/stop"
                 ) {
                     const result =
                         await stopTraining();
@@ -1525,9 +2036,9 @@ const server =
 
                 if (
                     req.method ===
-                    "POST" &&
+                        "POST" &&
                     pathname ===
-                    "/api/generate"
+                        "/api/generate"
                 ) {
                     const body =
                         await readBody(
@@ -1552,9 +2063,9 @@ const server =
 
                 if (
                     req.method ===
-                    "POST" &&
+                        "POST" &&
                     pathname ===
-                    "/api/generate/stop"
+                        "/api/generate/stop"
                 ) {
                     const result =
                         stopGeneration();
@@ -1568,17 +2079,18 @@ const server =
                     return;
                 }
 
-                /* -------------------------
-                   STATIC
-                   ------------------------- */
+
+                /* =================================================
+                   STATIC FILES
+                   ================================================= */
 
                 let filePath;
 
                 if (
                     pathname ===
-                    "/" ||
+                        "/" ||
                     pathname ===
-                    "/index.html"
+                        "/index.html"
                 ) {
                     filePath =
                         path.join(
@@ -1590,7 +2102,7 @@ const server =
                         path.normalize(
                             pathname
                         ).replace(
-                            /^(\.\.[/\\])+/, ""
+                            /^(\\.\\.[/\\])+/, ""
                         );
 
                     filePath =
@@ -1600,9 +2112,24 @@ const server =
                         );
                 }
 
-                if (
-                    !filePath.startsWith(
+                const rootResolved =
+                    path.resolve(
                         ROOT
+                    );
+
+                const fileResolved =
+                    path.resolve(
+                        filePath
+                    );
+
+                if (
+                    !(
+                        fileResolved ===
+                            rootResolved ||
+                        fileResolved.startsWith(
+                            rootResolved +
+                            path.sep
+                        )
                     )
                 ) {
                     text(
@@ -1691,12 +2218,20 @@ const server =
                     error
                 );
 
-                sendError(
-                    res,
-                    500,
-                    "Interner Serverfehler.",
-                    error
-                );
+                if (
+                    !res.headersSent
+                ) {
+                    sendError(
+                        res,
+                        500,
+                        "Interner Serverfehler.",
+                        error
+                    );
+                } else {
+                    try {
+                        res.end();
+                    } catch {}
+                }
             }
         }
     );
@@ -1709,13 +2244,13 @@ const server =
 server.listen(
     PORT,
     "0.0.0.0",
-    () => {
+    async () => {
         console.log(
             "======================================"
         );
 
         console.log(
-            " LUMORA"
+            " CubeGo"
         );
 
         console.log(
@@ -1735,6 +2270,51 @@ server.listen(
         console.log(
             "GELERNT:    " +
             LEARNED_DIR
+        );
+
+        console.log(
+            "GitHub:     " +
+            (
+                GITHUB_TOKEN
+                    ? "aktiv (" +
+                      GITHUB_OWNER +
+                      "/" +
+                      GITHUB_REPO +
+                      ")"
+                    : "nicht konfiguriert"
+            )
+        );
+
+        console.log(
+            "--------------------------------------"
+        );
+
+        /*
+         * WICHTIG:
+         * Nach einem Render-Neustart ist GELERNT normalerweise
+         * leer. Deshalb holen wir das gespeicherte Modell
+         * jetzt automatisch aus GitHub zurück.
+         */
+
+        if (GITHUB_TOKEN) {
+            try {
+                const restored =
+                    await restoreLearnedFromGitHub();
+
+                console.log(
+                    "[GITHUB] Wiederherstellung abgeschlossen:",
+                    restored
+                );
+            } catch (error) {
+                console.error(
+                    "[GITHUB] Wiederherstellung fehlgeschlagen:",
+                    error
+                );
+            }
+        }
+
+        console.log(
+            "--------------------------------------"
         );
 
         console.log(
@@ -1760,22 +2340,24 @@ server.listen(
         );
 
         console.log(
+            "Config:     " +
+            (
+                fileExists(
+                    CONFIG_FILE
+                )
+                    ? "vorhanden"
+                    : "noch nicht vorhanden"
+            )
+        );
+
+        console.log(
             "Daten:      " +
             getDataFiles().length +
             " Datei(en)"
         );
 
         console.log(
-            "GitHub:     " +
-            (
-                GITHUB_TOKEN
-                    ? "aktiv (" +
-                      GITHUB_OWNER +
-                      "/" +
-                      GITHUB_REPO +
-                      ")"
-                    : "nicht konfiguriert"
-            )
+            "--------------------------------------"
         );
 
         console.log(
@@ -1836,72 +2418,69 @@ server.listen(
     }
 );
 
+
+/* =========================================================
+   SAUBERES BEENDEN
+   ========================================================= */
+
+async function shutdown(
+    signal
+) {
+    console.log(
+        signal +
+        " erhalten."
+    );
+
+    if (trainingWorker) {
+        try {
+            trainingWorker.postMessage({
+                type:
+                    "stop"
+            });
+        } catch {}
+    }
+
+    if (generateWorker) {
+        try {
+            generateWorker.postMessage({
+                type:
+                    "stop"
+            });
+        } catch {}
+    }
+
+    server.close(
+        () => {
+            process.exit(
+                0
+            );
+        }
+    );
+
+    setTimeout(
+        () => {
+            process.exit(
+                0
+            );
+        },
+        5000
+    );
+}
+
 process.on(
     "SIGTERM",
-    async () => {
-        console.log(
-            "SIGTERM erhalten."
-        );
-
-        if (trainingWorker) {
-            try {
-                trainingWorker.postMessage({
-                    type:
-                        "stop"
-                });
-            } catch {}
-        }
-
-        if (generateWorker) {
-            try {
-                generateWorker.postMessage({
-                    type:
-                        "stop"
-                });
-            } catch {}
-        }
-
-        server.close(
-            () => {
-                process.exit(
-                    0
-                );
-            }
+    () => {
+        shutdown(
+            "SIGTERM"
         );
     }
 );
 
 process.on(
     "SIGINT",
-    async () => {
-        console.log(
-            "SIGINT erhalten."
-        );
-
-        if (trainingWorker) {
-            try {
-                trainingWorker.postMessage({
-                    type:
-                        "stop"
-                });
-            } catch {}
-        }
-
-        if (generateWorker) {
-            try {
-                generateWorker.postMessage({
-                    type:
-                        "stop"
-                });
-            } catch {}
-        }
-
-        server.close(
-            () => {
-                process.exit(
-                    0
-                );
-            }
+    () => {
+        shutdown(
+            "SIGINT"
         );
     }
 );
