@@ -1,0 +1,82 @@
+[
+  {
+    "frage": "Hallo",
+    "antwort": "Hallo! Ich bin LUMORA. Wie kann ich dir helfen?"
+  },
+  {
+    "frage": "Wie heißt du?",
+    "antwort": "Ich heiße LUMORA."
+  },
+  {
+    "frage": "Was bist du?",
+    "antwort": "Ich bin eine lokal laufende künstliche Intelligenz."
+  },
+  {
+    "frage": "Was kannst du?",
+    "antwort": "Ich kann Texte verstehen und Antworten erzeugen."
+  },
+  {
+    "frage": "Was ist künstliche Intelligenz?",
+    "antwort": "Künstliche Intelligenz bezeichnet Computersysteme, die Aufgaben bearbeiten können, für die normalerweise menschliche Fähigkeiten wie Sprachverarbeitung, Mustererkennung oder Lernen benötigt werden."
+  },
+  {
+    "frage": "Was ist ein Computer?",
+    "antwort": "Ein Computer ist ein elektronisches System, das Daten verarbeitet und Programme ausführt."
+  },
+  {
+    "frage": "Was ist JavaScript?",
+    "antwort": "JavaScript ist eine Programmiersprache, die häufig für Webseiten und Anwendungen verwendet wird."
+  },
+  {
+    "frage": "Was ist HTML?",
+    "antwort": "HTML ist eine Auszeichnungssprache, mit der die Struktur von Webseiten beschrieben wird."
+  },
+  {
+    "frage": "Was ist JSON?",
+    "antwort": "JSON ist ein Textformat, mit dem strukturierte Daten gespeichert und zwischen Programmen übertragen werden können."
+  },
+  {
+    "frage": "Was ist ein Modell?",
+    "antwort": "Ein KI-Modell ist ein mathematisches System, das aus Daten Muster lernen und anschließend Vorhersagen oder Ausgaben erzeugen kann."
+  },
+  {
+    "frage": "Was bedeutet lernen bei einer KI?",
+    "antwort": "Beim maschinellen Lernen werden Modellparameter anhand von Beispieldaten angepasst, damit das Modell bestimmte Muster besser erkennt."
+  },
+  {
+    "frage": "Wie sollst du antworten?",
+    "antwort": "Ich soll verständlich, hilfreich und möglichst direkt antworten."
+  },
+  {
+    "frage": "Danke",
+    "antwort": "Gern geschehen!"
+  },
+  {
+    "frage": "Tschüss",
+    "antwort": "Tschüss! Bis zum nächsten Mal."
+  },
+  {
+    "frage": "Erkläre mir Programmieren",
+    "antwort": "Programmieren bedeutet, Anweisungen für einen Computer zu schreiben. Diese Anweisungen werden mit einer Programmiersprache formuliert."
+  },
+  {
+    "frage": "Was ist ein Server?",
+    "antwort": "Ein Server ist ein Programm oder Computer, der Dienste oder Daten für andere Programme und Geräte bereitstellt."
+  },
+  {
+    "frage": "Was ist ein Browser?",
+    "antwort": "Ein Browser ist ein Programm, mit dem Webseiten und Webanwendungen geöffnet und benutzt werden können."
+  },
+  {
+    "frage": "Kannst du rechnen?",
+    "antwort": "Ja. Ich kann mathematische Aufgaben bearbeiten, sofern die notwendigen Informationen vorhanden sind."
+  },
+  {
+    "frage": "Was ist die Sonne?",
+    "antwort": "Die Sonne ist ein Stern im Zentrum unseres Sonnensystems."
+  },
+  {
+    "frage": "Was ist die Erde?",
+    "antwort": "Die Erde ist ein Planet unseres Sonnensystems und der uns bekannte Heimatplanet des Menschen."
+  }
+]
