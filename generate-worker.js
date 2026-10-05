@@ -37,19 +37,17 @@ function send(type, data = {}) {
 
 function readJSON(file) {
     return JSON.parse(
-        fs.readFileSync(
-            file,
-            "utf8"
-        )
+        fs.readFileSync(file, "utf8")
     );
 }
 
 
 /* =========================================================
-   TOKENIZER
+   TOKENIZER-MODUL
    ========================================================= */
 
-function loadTokenizer() {
+function loadTokenizerModule() {
+
     const tokenizerFile =
         path.join(
             ROOT,
@@ -58,63 +56,147 @@ function loadTokenizer() {
 
     if (!fs.existsSync(tokenizerFile)) {
         throw new Error(
-            "tokenizer.js wurde nicht gefunden."
+            "tokenizer.js wurde nicht gefunden: " +
+            tokenizerFile
         );
     }
 
-    const tokenizerModule =
+    delete require.cache[
+        require.resolve(tokenizerFile)
+    ];
+
+    const loaded =
         require(tokenizerFile);
 
-    const Tokenizer =
-        tokenizerModule.AdvancedTokenizer ||
-        tokenizerModule;
-
-    if (
-        typeof Tokenizer !==
-        "function"
-    ) {
+    if (!loaded) {
         throw new Error(
-            "AdvancedTokenizer konnte nicht geladen werden."
+            "tokenizer.js hat keinen Export."
         );
     }
+
+    return loaded;
+}
+
+
+/* =========================================================
+   TOKENIZER FACTORY
+   ========================================================= */
+
+function getTokenizerFactory() {
+
+    const loaded =
+        loadTokenizerModule();
+
+    const AdvancedTokenizer =
+        loaded.AdvancedTokenizer ||
+        loaded.default ||
+        loaded;
+
+    /*
+     * Aktuelle LUMORA-Version:
+     *
+     * AdvancedTokenizer.create()
+     */
+
+    if (
+        AdvancedTokenizer &&
+        typeof AdvancedTokenizer.create ===
+        "function"
+    ) {
+        return AdvancedTokenizer;
+    }
+
+    /*
+     * Fallback für ältere Versionen:
+     *
+     * class AdvancedTokenizer
+     */
+
+    if (
+        typeof AdvancedTokenizer ===
+        "function"
+    ) {
+        return {
+            create() {
+                return new AdvancedTokenizer();
+            }
+        };
+    }
+
+    throw new Error(
+        "AdvancedTokenizer konnte nicht geladen werden. " +
+        "Erwartet wurde AdvancedTokenizer.create()."
+    );
+}
+
+
+/* =========================================================
+   TOKENIZER LADEN
+   ========================================================= */
+
+function loadTokenizer() {
 
     if (!fs.existsSync(TOKENIZER_FILE)) {
         throw new Error(
-            "GELERNT/tokenizer.json wurde noch nicht erstellt. Trainiere die KI zuerst."
+            "GELERNT/tokenizer.json wurde noch nicht erstellt. " +
+            "Trainiere die KI zuerst."
         );
     }
+
+    const AdvancedTokenizer =
+        getTokenizerFactory();
 
     const saved =
         readJSON(
             TOKENIZER_FILE
         );
 
-    let tokenizer = null;
+    let tokenizer =
+        AdvancedTokenizer.create();
+
+    if (!tokenizer) {
+        throw new Error(
+            "Tokenizer konnte nicht erstellt werden."
+        );
+    }
+
+    /*
+     * Aktuelle Engine
+     */
 
     if (
-        typeof Tokenizer.fromJSON ===
+        typeof tokenizer.import ===
         "function"
     ) {
-        tokenizer =
-            Tokenizer.fromJSON(
-                saved
-            );
-    } else {
-        tokenizer =
-            new Tokenizer();
 
-        if (
-            typeof tokenizer.import ===
-            "function"
-        ) {
-            tokenizer.import(
+        tokenizer.import(
+            saved
+        );
+
+    }
+
+    /*
+     * Fallback
+     */
+
+    else if (
+        typeof tokenizer.fromJSON ===
+        "function"
+    ) {
+
+        tokenizer =
+            tokenizer.fromJSON(
                 saved
             );
-        } else {
-            throw new Error(
-                "Tokenizer kann nicht importiert werden."
-            );
-        }
+
+    }
+
+    else {
+
+        throw new Error(
+            "Tokenizer kann nicht importiert werden. " +
+            "Die Engine besitzt weder import() noch fromJSON()."
+        );
     }
 
     return tokenizer;
@@ -122,10 +204,11 @@ function loadTokenizer() {
 
 
 /* =========================================================
-   MODELL
+   MODELL-MODUL
    ========================================================= */
 
-function loadModel() {
+function loadModelModule() {
+
     const modelFile =
         path.join(
             ROOT,
@@ -134,16 +217,42 @@ function loadModel() {
 
     if (!fs.existsSync(modelFile)) {
         throw new Error(
-            "model.js wurde nicht gefunden."
+            "model.js wurde nicht gefunden: " +
+            modelFile
         );
     }
 
-    const modelModule =
+    delete require.cache[
+        require.resolve(modelFile)
+    ];
+
+    const loaded =
         require(modelFile);
+
+    if (!loaded) {
+        throw new Error(
+            "model.js hat keinen Export."
+        );
+    }
+
+    return loaded;
+}
+
+
+/* =========================================================
+   MODELL LADEN
+   ========================================================= */
+
+function loadModel() {
+
+    const modelModule =
+        loadModelModule();
 
     const Model =
         modelModule.LanguageModel ||
-        modelModule.LargeLanguageModel;
+        modelModule.LargeLanguageModel ||
+        modelModule.default ||
+        modelModule;
 
     if (
         typeof Model !==
@@ -156,7 +265,8 @@ function loadModel() {
 
     if (!fs.existsSync(MODEL_FILE)) {
         throw new Error(
-            "GELERNT/model.json wurde noch nicht erstellt. Trainiere die KI zuerst."
+            "GELERNT/model.json wurde noch nicht erstellt. " +
+            "Trainiere die KI zuerst."
         );
     }
 
@@ -167,7 +277,9 @@ function loadModel() {
             CONFIG_FILE
         )
     ) {
+
         try {
+
             const savedConfig =
                 readJSON(
                     CONFIG_FILE
@@ -178,13 +290,27 @@ function loadModel() {
                 savedConfig ||
                 {};
 
-        } catch {}
+        } catch {
+
+            config = {};
+
+        }
     }
 
-    const model =
-        new Model(
-            config
-        );
+    let model;
+
+    try {
+
+        model =
+            new Model(
+                config
+            );
+
+    } catch {
+
+        model =
+            new Model();
+    }
 
     const savedModel =
         readJSON(
@@ -195,19 +321,29 @@ function loadModel() {
         typeof model.load ===
         "function"
     ) {
+
         model.load(
             savedModel
         );
-    } else if (
+
+    }
+
+    else if (
         typeof model.fromJSON ===
         "function"
     ) {
+
         model.fromJSON(
             savedModel
         );
-    } else {
+
+    }
+
+    else {
+
         throw new Error(
-            "Das Modell kann nicht geladen werden."
+            "Das Modell kann nicht geladen werden. " +
+            "Es fehlt load() bzw. fromJSON()."
         );
     }
 
@@ -224,6 +360,7 @@ function buildPrompt(
     history,
     systemPrompt
 ) {
+
     let result = "";
 
     result +=
@@ -231,7 +368,7 @@ function buildPrompt(
 
     result +=
         systemPrompt ||
-        "Du bist eine hilfreiche, intelligente KI.";
+        "Du bist LUMORA, eine hilfreiche intelligente KI.";
 
     result +=
         "\n<|end|>\n";
@@ -240,13 +377,15 @@ function buildPrompt(
     if (
         Array.isArray(history)
     ) {
+
         for (
-            const message of
-            history
+            const message of history
         ) {
+
             if (
                 !message ||
-                !message.content
+                message.content === undefined ||
+                message.content === null
             ) {
                 continue;
             }
@@ -302,6 +441,7 @@ function isStopToken(
     token,
     tokenizer
 ) {
+
     const stopStrings = [
         "<|end|>",
         "<|user|>",
@@ -309,28 +449,295 @@ function isStopToken(
         "<|tool|>"
     ];
 
-    let decoded = "";
-
     try {
-        decoded =
+
+        const decoded =
             tokenizer.decode([
                 token
             ]);
+
+        return stopStrings.some(
+            stop =>
+                decoded.includes(
+                    stop
+                )
+        );
+
     } catch {
+
         return false;
+
+    }
+}
+
+
+/* =========================================================
+   LOGITS → TOKEN
+   ========================================================= */
+
+function extractToken(
+    result,
+    settings
+) {
+
+    if (
+        typeof result ===
+        "number"
+    ) {
+        return result;
     }
 
-    return stopStrings.some(
-        stop =>
-            decoded.includes(
-                stop
-            )
+
+    if (
+        result &&
+        typeof result.token ===
+        "number"
+    ) {
+        return result.token;
+    }
+
+
+    if (
+        result &&
+        typeof result.tokenId ===
+        "number"
+    ) {
+        return result.tokenId;
+    }
+
+
+    /*
+     * Falls predictNext() direkt
+     * Logits zurückgibt.
+     */
+
+    let logits = null;
+
+    if (
+        result &&
+        Array.isArray(result.logits)
+    ) {
+        logits =
+            result.logits;
+    }
+
+    else if (
+        Array.isArray(result)
+    ) {
+        logits =
+            result;
+    }
+
+
+    if (
+        logits &&
+        logits.length > 0
+    ) {
+
+        const temperature =
+            Math.max(
+                0.01,
+                Number(
+                    settings.temperature ||
+                    0.82
+                )
+            );
+
+        const values =
+            new Array(
+                logits.length
+            );
+
+        let max =
+            -Infinity;
+
+        for (
+            let i = 0;
+            i < logits.length;
+            i++
+        ) {
+
+            const value =
+                Number(
+                    logits[i]
+                ) /
+                temperature;
+
+            values[i] =
+                Number.isFinite(
+                    value
+                )
+                    ? value
+                    : -Infinity;
+
+            if (
+                values[i] >
+                max
+            ) {
+                max =
+                    values[i];
+            }
+        }
+
+
+        const probabilities =
+            new Array(
+                values.length
+            );
+
+        let sum = 0;
+
+        for (
+            let i = 0;
+            i < values.length;
+            i++
+        ) {
+
+            const p =
+                Math.exp(
+                    values[i] -
+                    max
+                );
+
+            probabilities[i] =
+                Number.isFinite(p)
+                    ? p
+                    : 0;
+
+            sum +=
+                probabilities[i];
+        }
+
+
+        if (
+            sum <= 0
+        ) {
+            return 0;
+        }
+
+
+        /*
+         * Top-K
+         */
+
+        let candidates =
+            probabilities.map(
+                (p, i) => ({
+                    index: i,
+                    probability: p
+                })
+            );
+
+        candidates.sort(
+            (a, b) =>
+                b.probability -
+                a.probability
+        );
+
+
+        const topK =
+            Math.max(
+                1,
+                Math.min(
+                    candidates.length,
+                    Number(
+                        settings.topK ||
+                        40
+                    )
+                )
+            );
+
+        candidates =
+            candidates.slice(
+                0,
+                topK
+            );
+
+
+        /*
+         * Top-P
+         */
+
+        let sortedSum = 0;
+
+        const topP =
+            Math.min(
+                1,
+                Math.max(
+                    0.01,
+                    Number(
+                        settings.topP ||
+                        0.92
+                    )
+                )
+            );
+
+        const filtered = [];
+
+        for (
+            const candidate of
+            candidates
+        ) {
+
+            sortedSum +=
+                candidate.probability;
+
+            filtered.push(
+                candidate
+            );
+
+            if (
+                sortedSum /
+                sum >=
+                topP
+            ) {
+                break;
+            }
+        }
+
+
+        /*
+         * Sampling
+         */
+
+        let random =
+            Math.random() *
+            filtered.reduce(
+                (total, item) =>
+                    total +
+                    item.probability,
+                0
+            );
+
+        for (
+            const item of
+            filtered
+        ) {
+
+            random -=
+                item.probability;
+
+            if (
+                random <= 0
+            ) {
+                return item.index;
+            }
+        }
+
+        return filtered[
+            filtered.length - 1
+        ].index;
+    }
+
+
+    throw new Error(
+        "Das Modell hat kein gültiges Token oder Logits zurückgegeben."
     );
 }
 
 
 /* =========================================================
-   ANTWORT GENERIEREN
+   GENERIERUNG
    ========================================================= */
 
 function generate(
@@ -339,11 +746,16 @@ function generate(
     prompt,
     options
 ) {
+
     const settings = {
+
         maxTokens:
-            Number(
-                options.maxTokens ||
-                160
+            Math.max(
+                1,
+                Number(
+                    options.maxTokens ||
+                    160
+                )
             ),
 
         temperature:
@@ -387,9 +799,10 @@ function generate(
 
 
     if (
-        !inputTokens ||
+        !Array.isArray(inputTokens) ||
         inputTokens.length === 0
     ) {
+
         throw new Error(
             "Der Prompt konnte nicht tokenisiert werden."
         );
@@ -416,15 +829,11 @@ function generate(
         step < settings.maxTokens;
         step++
     ) {
+
         if (stopped) {
             break;
         }
 
-
-        /*
-         * Nur den letzten Kontextbereich
-         * an das Modell geben.
-         */
 
         let context =
             tokens;
@@ -433,6 +842,7 @@ function generate(
             context.length >
             contextSize
         ) {
+
             context =
                 context.slice(
                     context.length -
@@ -448,47 +858,55 @@ function generate(
             typeof model.predictNext ===
             "function"
         ) {
+
             result =
                 model.predictNext(
                     context,
                     settings
                 );
-        } else {
+
+        }
+
+        else if (
+            typeof model.generateNext ===
+            "function"
+        ) {
+
+            result =
+                model.generateNext(
+                    context,
+                    settings
+                );
+
+        }
+
+        else {
+
             throw new Error(
-                "model.predictNext() fehlt."
+                "Das Modell besitzt weder predictNext() noch generateNext()."
             );
         }
 
 
-        let nextToken;
+        const nextToken =
+            extractToken(
+                result,
+                settings
+            );
 
 
         if (
-            typeof result ===
-            "number"
+            !Number.isInteger(
+                nextToken
+            ) ||
+            nextToken < 0
         ) {
-            nextToken =
-                result;
 
-        } else if (
-            result &&
-            typeof result.token ===
-            "number"
-        ) {
-            nextToken =
-                result.token;
-
-        } else if (
-            result &&
-            typeof result.tokenId ===
-            "number"
-        ) {
-            nextToken =
-                result.tokenId;
-
-        } else {
             throw new Error(
-                "Das Modell hat kein gültiges Token zurückgegeben."
+                "Ungültige Token-ID: " +
+                String(
+                    nextToken
+                )
             );
         }
 
@@ -512,18 +930,20 @@ function generate(
         );
 
 
-        /*
-         * Fortschritt zurückgeben.
-         */
-
         let partial = "";
 
         try {
+
             partial =
                 tokenizer.decode(
                     generated
                 );
-        } catch {}
+
+        } catch {
+
+            partial = "";
+
+        }
 
 
         send(
@@ -542,49 +962,51 @@ function generate(
 
 
         /*
-         * Event-Loop freigeben.
+         * Worker kurz freigeben.
          */
 
         if (
             step % 2 === 0
         ) {
-            /*
-             * Worker bleibt für Stop-Befehle
-             * erreichbar.
-             */
-            Atomics.wait(
-                new Int32Array(
-                    new SharedArrayBuffer(4)
-                ),
-                0,
-                0,
-                1
-            );
+
+            awaitSleep(1);
+
         }
     }
 
 
-    let answer =
-        tokenizer.decode(
-            generated
+    let answer = "";
+
+    try {
+
+        answer =
+            tokenizer.decode(
+                generated
+            );
+
+    } catch (error) {
+
+        throw new Error(
+            "Antwort konnte nicht dekodiert werden: " +
+            error.message
         );
+    }
 
-
-    /*
-     * Stop-Marker entfernen.
-     */
 
     const stopStrings = [
         "<|end|>",
         "<|user|>",
         "<|system|>",
-        "<|tool|>"
+        "<|tool|>",
+        "<|assistant|>"
     ];
+
 
     for (
         const stop of
         stopStrings
     ) {
+
         const index =
             answer.indexOf(
                 stop
@@ -593,6 +1015,7 @@ function generate(
         if (
             index !== -1
         ) {
+
             answer =
                 answer.substring(
                     0,
@@ -603,6 +1026,7 @@ function generate(
 
 
     return {
+
         answer:
             answer.trim(),
 
@@ -616,11 +1040,36 @@ function generate(
 
 
 /* =========================================================
+   KLEINES SLEEP
+   ========================================================= */
+
+function awaitSleep(ms) {
+
+    const buffer =
+        new SharedArrayBuffer(4);
+
+    const array =
+        new Int32Array(
+            buffer
+        );
+
+    Atomics.wait(
+        array,
+        0,
+        0,
+        ms
+    );
+}
+
+
+/* =========================================================
    START
    ========================================================= */
 
 async function main() {
+
     try {
+
         send(
             "status",
             {
@@ -635,6 +1084,7 @@ async function main() {
 
 
         if (stopped) {
+
             send(
                 "finished",
                 {
@@ -661,6 +1111,7 @@ async function main() {
 
 
         if (stopped) {
+
             send(
                 "finished",
                 {
@@ -683,7 +1134,7 @@ async function main() {
 
 
         const result =
-            generate(
+            await generate(
                 model,
                 tokenizer,
                 workerData.prompt,
@@ -705,8 +1156,9 @@ async function main() {
             }
         );
 
+    }
 
-    } catch (error) {
+    catch (error) {
 
         send(
             "error",
