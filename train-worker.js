@@ -4,9 +4,9 @@ const fs = require("fs");
 const path = require("path");
 const { parentPort, workerData } = require("worker_threads");
 
-const ROOT = workerData.root;
-const DATEN = workerData.daten;
-const GELERNT = workerData.gelernt;
+const ROOT = workerData.root || __dirname;
+const DATEN = workerData.daten || path.join(ROOT, "DATEN");
+const GELERNT = workerData.gelernt || path.join(ROOT, "GELERNT");
 const OPTIONS = workerData.options || {};
 
 const MODEL_FILE = path.join(GELERNT, "model.json");
@@ -33,15 +33,19 @@ function send(type, data = {}) {
     }
 }
 
-function atomicWrite(file, data) {
-    const temp =
-        file +
-        ".tmp-" +
-        process.pid +
-        "-" +
-        Date.now();
+function writeJSON(file, data) {
+    fs.mkdirSync(path.dirname(file), {
+        recursive: true
+    });
 
-    fs.writeFileSync(temp, data, "utf8");
+    const temp = file + ".tmp";
+
+    fs.writeFileSync(
+        temp,
+        JSON.stringify(data, null, 2),
+        "utf8"
+    );
+
     fs.renameSync(temp, file);
 }
 
@@ -51,114 +55,10 @@ function readJSON(file) {
     );
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 
 /* =========================================================
-   DATEN
+   DATEN LADEN
    ========================================================= */
-
-const QUESTION_KEYS = [
-    "frage",
-    "question",
-    "user",
-    "input",
-    "prompt"
-];
-
-const ANSWER_KEYS = [
-    "antwort",
-    "answer",
-    "assistant",
-    "output",
-    "response"
-];
-
-function findKey(object, keys) {
-    if (!object || typeof object !== "object") {
-        return null;
-    }
-
-    for (const key of Object.keys(object)) {
-        if (keys.includes(key.toLowerCase())) {
-            return key;
-        }
-    }
-
-    return null;
-}
-
-function collectExamples(value, output) {
-    if (Array.isArray(value)) {
-        for (const item of value) {
-            collectExamples(item, output);
-        }
-
-        return;
-    }
-
-    if (!value || typeof value !== "object") {
-        return;
-    }
-
-    const questionKey =
-        findKey(value, QUESTION_KEYS);
-
-    const answerKey =
-        findKey(value, ANSWER_KEYS);
-
-    if (
-        questionKey &&
-        answerKey &&
-        typeof value[questionKey] === "string" &&
-        typeof value[answerKey] === "string"
-    ) {
-        const question =
-            value[questionKey].trim();
-
-        const answer =
-            value[answerKey].trim();
-
-        if (question && answer) {
-            output.push({
-                question,
-                answer
-            });
-        }
-    }
-
-    for (const key of Object.keys(value)) {
-        collectExamples(value[key], output);
-    }
-}
-
-function collectTexts(value, output) {
-    if (typeof value === "string") {
-        const text = value.trim();
-
-        if (text) {
-            output.push(text);
-        }
-
-        return;
-    }
-
-    if (Array.isArray(value)) {
-        for (const item of value) {
-            collectTexts(item, output);
-        }
-
-        return;
-    }
-
-    if (value && typeof value === "object") {
-        for (const key of Object.keys(value)) {
-            collectTexts(value[key], output);
-        }
-    }
-}
 
 function getDataFiles() {
     if (!fs.existsSync(DATEN)) {
@@ -169,159 +69,195 @@ function getDataFiles() {
         return [];
     }
 
-    return fs.readdirSync(DATEN, {
-        withFileTypes: true
-    })
-    .filter(entry => {
-        if (!entry.isFile()) {
-            return false;
-        }
+    return fs.readdirSync(DATEN)
+        .filter(name => {
+            const lower = name.toLowerCase();
 
-        const lower =
-            entry.name.toLowerCase();
-
-        return (
-            lower.endsWith(".json") ||
-            lower.endsWith(".jsonl") ||
-            lower.endsWith(".txt")
-        );
-    })
-    .map(entry =>
-        path.join(
-            DATEN,
-            entry.name
-        )
-    );
+            return (
+                lower.endsWith(".json") ||
+                lower.endsWith(".jsonl") ||
+                lower.endsWith(".txt")
+            );
+        });
 }
 
-function loadTrainingData() {
+function loadTrainingExamples() {
     const files = getDataFiles();
-
     const examples = [];
-    const texts = [];
-    const seen = new Set();
 
-    for (const file of files) {
-        if (stopRequested) {
-            break;
+    const questionKeys = [
+        "frage",
+        "question",
+        "user",
+        "input",
+        "prompt"
+    ];
+
+    const answerKeys = [
+        "antwort",
+        "answer",
+        "assistant",
+        "output",
+        "response"
+    ];
+
+    function scan(value) {
+        if (stopRequested) return;
+
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                scan(item);
+            }
+
+            return;
         }
 
-        let raw = "";
+        if (!value || typeof value !== "object") {
+            return;
+        }
+
+        let question = null;
+        let answer = null;
+
+        for (const key of Object.keys(value)) {
+            const lower = key.toLowerCase();
+
+            if (questionKeys.includes(lower)) {
+                question = value[key];
+            }
+
+            if (answerKeys.includes(lower)) {
+                answer = value[key];
+            }
+        }
+
+        if (
+            typeof question === "string" &&
+            typeof answer === "string" &&
+            question.trim() &&
+            answer.trim()
+        ) {
+            examples.push({
+                question: question.trim(),
+                answer: answer.trim()
+            });
+        }
+
+        for (const key of Object.keys(value)) {
+            scan(value[key]);
+        }
+    }
+
+    for (const filename of files) {
+        if (stopRequested) break;
+
+        const file = path.join(
+            DATEN,
+            filename
+        );
+
+        let raw;
 
         try {
-            raw =
-                fs.readFileSync(
-                    file,
-                    "utf8"
-                );
+            raw = fs.readFileSync(
+                file,
+                "utf8"
+            );
         } catch (error) {
             console.error(
-                "Fehler beim Lesen:",
-                file,
+                "Datei konnte nicht gelesen werden:",
+                filename,
                 error.message
             );
 
             continue;
         }
 
-        try {
-            const json =
-                JSON.parse(raw);
-
-            const localExamples = [];
-
-            collectExamples(
-                json,
-                localExamples
-            );
-
-            for (const example of localExamples) {
-                const id =
-                    example.question +
-                    "\n" +
-                    example.answer;
-
-                if (!seen.has(id)) {
-                    seen.add(id);
-                    examples.push(example);
-                }
-            }
-
-            collectTexts(
-                json,
-                texts
-            );
-
-        } catch {
+        if (
+            filename.toLowerCase().endsWith(".txt")
+        ) {
             if (raw.trim()) {
-                texts.push(
-                    raw.trim()
-                );
+                examples.push({
+                    question:
+                        "Erzähle etwas über diesen Text.",
+                    answer:
+                        raw.trim()
+                });
             }
+
+            continue;
+        }
+
+        try {
+            if (
+                filename.toLowerCase().endsWith(".jsonl")
+            ) {
+                const lines = raw
+                    .split(/\r?\n/)
+                    .filter(Boolean);
+
+                for (const line of lines) {
+                    try {
+                        scan(JSON.parse(line));
+                    } catch {}
+                }
+            } else {
+                scan(JSON.parse(raw));
+            }
+        } catch (error) {
+            console.error(
+                "JSON konnte nicht verarbeitet werden:",
+                filename,
+                error.message
+            );
         }
     }
 
-    if (
-        examples.length === 0 &&
-        texts.length > 0
-    ) {
-        for (const text of texts) {
-            if (text.length >= 4) {
-                examples.push({
-                    question:
-                        "Erzähle etwas über dieses Thema.",
+    const unique = [];
+    const seen = new Set();
 
-                    answer:
-                        text
-                });
-            }
+    for (const example of examples) {
+        const id =
+            example.question +
+            "\n" +
+            example.answer;
+
+        if (!seen.has(id)) {
+            seen.add(id);
+            unique.push(example);
         }
     }
 
     return {
         files,
-        examples,
-        texts
+        examples: unique
     };
 }
 
 
 /* =========================================================
-   TOKENIZER
+   TOKENIZER LADEN
    ========================================================= */
 
-function loadTokenizerModule() {
-    const file =
+function loadTokenizer() {
+    const tokenizerFile =
         path.join(
             ROOT,
             "tokenizer.js"
         );
 
-    if (!fs.existsSync(file)) {
+    if (!fs.existsSync(tokenizerFile)) {
         throw new Error(
-            "tokenizer.js fehlt: " + file
+            "tokenizer.js wurde nicht gefunden."
         );
     }
 
     delete require.cache[
-        require.resolve(file)
+        require.resolve(tokenizerFile)
     ];
 
     const loaded =
-        require(file);
-
-    if (!loaded) {
-        throw new Error(
-            "tokenizer.js hat keinen Export."
-        );
-    }
-
-    return loaded;
-}
-
-function getTokenizerFactory() {
-    const loaded =
-        loadTokenizerModule();
+        require(tokenizerFile);
 
     const AdvancedTokenizer =
         loaded.AdvancedTokenizer ||
@@ -333,158 +269,231 @@ function getTokenizerFactory() {
         typeof AdvancedTokenizer.create ===
         "function"
     ) {
-        return AdvancedTokenizer;
+        return AdvancedTokenizer.create();
     }
 
     if (
         typeof AdvancedTokenizer ===
         "function"
     ) {
-        return {
-            create() {
-                return new AdvancedTokenizer();
-            }
-        };
+        return new AdvancedTokenizer();
     }
 
     throw new Error(
-        "AdvancedTokenizer konnte nicht geladen werden. " +
-        "Erwartet wurde AdvancedTokenizer.create()."
+        "AdvancedTokenizer konnte nicht erstellt werden."
     );
 }
 
-function createTokenizer() {
-    const AdvancedTokenizer =
-        getTokenizerFactory();
 
-    let tokenizer = null;
+/* =========================================================
+   TOKENIZER TRAINING
+   ========================================================= */
 
-    if (fs.existsSync(TOKENIZER_FILE)) {
-        try {
-            const saved =
-                readJSON(
-                    TOKENIZER_FILE
-                );
+/*
+   WICHTIG:
 
-            tokenizer =
-                AdvancedTokenizer.create();
+   Wir rufen hier NICHT mehr blind tokenizer.trainBPE()
+   auf.
 
-            if (
-                typeof tokenizer.import ===
-                "function"
-            ) {
-                tokenizer.import(saved);
-            } else if (
-                typeof tokenizer.fromJSON ===
-                "function"
-            ) {
-                tokenizer =
-                    tokenizer.fromJSON(saved);
-            }
+   Genau dieser Aufruf hat bei Render beim kleinen Datensatz
+   den Worker blockiert.
 
-        } catch (error) {
-            console.warn(
-                "Gespeicherter Tokenizer konnte nicht geladen werden:",
-                error.message
-            );
+   Stattdessen wird versucht, vorhandene Trainingsfunktionen
+   kontrolliert zu verwenden. Falls keine sichere Funktion
+   verfügbar ist, benutzen wir den vorhandenen Tokenizer direkt.
+*/
 
-            tokenizer = null;
-        }
-    }
-
-    if (!tokenizer) {
-        tokenizer =
-            AdvancedTokenizer.create();
-    }
-
-    if (!tokenizer) {
-        throw new Error(
-            "Tokenizer konnte nicht erstellt werden."
-        );
-    }
-
-    return tokenizer;
-}
-
-async function trainTokenizer(
+async function trainTokenizerSafe(
     tokenizer,
     examples
 ) {
+    send(
+        "progress",
+        {
+            phase: "tokenizer",
+            progress: 10,
+            message:
+                "Tokenizer wird vorbereitet..."
+        }
+    );
+
     if (stopRequested) {
         return tokenizer;
     }
 
-    const texts =
-        examples.map(example =>
-            "<|user|>\n" +
-            example.question +
-            "\n<|end|>\n" +
-            "<|assistant|>\n" +
-            example.answer +
-            "\n<|end|>"
-        );
+    const texts = examples.map(example =>
+        "<|user|>\n" +
+        example.question +
+        "\n<|end|>\n" +
+        "<|assistant|>\n" +
+        example.answer +
+        "\n<|end|>"
+    );
+
+    /*
+       Bei kleinen Datensätzen ist ein vorhandener Tokenizer
+       ausreichend für den ersten Test.
+    */
 
     if (
-        typeof tokenizer.train ===
-        "function"
-    ) {
-        try {
-            await tokenizer.train(
-                texts
-            );
-        } catch (error) {
-            console.warn(
-                "Tokenizer-Training:",
-                error.message
-            );
-        }
-    } else if (
         typeof tokenizer.trainBPE ===
         "function"
     ) {
-        try {
-            await tokenizer.trainBPE(
-                texts
+        send(
+            "progress",
+            {
+                phase: "tokenizer",
+                progress: 20,
+                message:
+                    "BPE-Tokenizer wird mit kleinem Datensatz vorbereitet..."
+            }
+        );
+
+        /*
+           Nur bei ausreichend Daten BPE starten.
+           Mit den aktuellen 20 Beispielen wird es übersprungen,
+           damit Render nicht hängen bleibt.
+        */
+
+        if (
+            texts.length >= 100
+        ) {
+            try {
+                await Promise.race([
+                    Promise.resolve(
+                        tokenizer.trainBPE(
+                            texts
+                        )
+                    ),
+                    new Promise(
+                        (_, reject) =>
+                            setTimeout(
+                                () =>
+                                    reject(
+                                        new Error(
+                                            "BPE-Training Timeout"
+                                        )
+                                    ),
+                                30000
+                            )
+                    )
+                ]);
+
+                send(
+                    "progress",
+                    {
+                        phase:
+                            "tokenizer",
+                        progress:
+                            70,
+                        message:
+                            "BPE-Training abgeschlossen."
+                    }
+                );
+
+            } catch (error) {
+                console.warn(
+                    "BPE übersprungen:",
+                    error.message
+                );
+
+                send(
+                    "progress",
+                    {
+                        phase:
+                            "tokenizer",
+                        progress:
+                            70,
+                        message:
+                            "BPE übersprungen – vorhandener Tokenizer wird verwendet."
+                    }
+                );
+            }
+        } else {
+            send(
+                "progress",
+                {
+                    phase:
+                        "tokenizer",
+                    progress:
+                        70,
+                    message:
+                        "Kleiner Datensatz erkannt – BPE wird übersprungen."
+                }
             );
+        }
+    } else if (
+        typeof tokenizer.train ===
+        "function" &&
+        texts.length >= 100
+    ) {
+        try {
+            await Promise.race([
+                Promise.resolve(
+                    tokenizer.train(
+                        texts
+                    )
+                ),
+                new Promise(
+                    (_, reject) =>
+                        setTimeout(
+                            () =>
+                                reject(
+                                    new Error(
+                                        "Tokenizer-Training Timeout"
+                                    )
+                                ),
+                            30000
+                        )
+                )
+            ]);
         } catch (error) {
             console.warn(
-                "Tokenizer-BPE-Training:",
+                "Tokenizer-Training übersprungen:",
                 error.message
             );
         }
     }
 
+    send(
+        "progress",
+        {
+            phase:
+                "tokenizer",
+            progress:
+                100,
+            message:
+                "Tokenizer bereit."
+        }
+    );
+
     return tokenizer;
 }
 
-function exportTokenizer(tokenizer) {
+function exportTokenizer(
+    tokenizer
+) {
     let data;
 
     if (
         typeof tokenizer.export ===
         "function"
     ) {
-        data =
-            tokenizer.export();
+        data = tokenizer.export();
     } else if (
         typeof tokenizer.toJSON ===
         "function"
     ) {
-        data =
-            tokenizer.toJSON();
+        data = tokenizer.toJSON();
     } else {
         throw new Error(
-            "Tokenizer besitzt keine export()- oder toJSON()-Funktion."
+            "Tokenizer kann nicht exportiert werden."
         );
     }
 
-    atomicWrite(
+    writeJSON(
         TOKENIZER_FILE,
-        JSON.stringify(
-            data,
-            null,
-            2
-        )
+        data
     );
 }
 
@@ -494,28 +503,27 @@ function exportTokenizer(tokenizer) {
    ========================================================= */
 
 function loadModelClass() {
-    const file =
+    const modelFile =
         path.join(
             ROOT,
             "model.js"
         );
 
-    if (!fs.existsSync(file)) {
+    if (!fs.existsSync(modelFile)) {
         throw new Error(
-            "model.js fehlt."
+            "model.js wurde nicht gefunden."
         );
     }
 
     delete require.cache[
-        require.resolve(file)
+        require.resolve(modelFile)
     ];
 
     const loaded =
-        require(file);
+        require(modelFile);
 
     const Model =
         loaded.LanguageModel ||
-        loaded.LargeLanguageModel ||
         loaded.default ||
         loaded;
 
@@ -531,16 +539,20 @@ function loadModelClass() {
     return Model;
 }
 
-function createModelConfig(tokenizer) {
+function createModel(
+    tokenizer
+) {
+    const Model =
+        loadModelClass();
+
     const vocabSize =
         Number(
             tokenizer.vocabSize ||
             tokenizer.vocab?.length ||
-            OPTIONS.vocabSize ||
             8192
         );
 
-    return {
+    const config = {
         vocabSize,
 
         contextSize:
@@ -579,7 +591,8 @@ function createModelConfig(tokenizer) {
                 512
             ),
 
-        dropout: 0,
+        dropout:
+            0,
 
         rmsEpsilon:
             0.00001,
@@ -614,77 +627,9 @@ function createModelConfig(tokenizer) {
         repetitionPenalty:
             1.08
     };
-}
-
-function createModel(tokenizer) {
-    const Model =
-        loadModelClass();
-
-    let config =
-        createModelConfig(
-            tokenizer
-        );
-
-    if (fs.existsSync(CONFIG_FILE)) {
-        try {
-            const saved =
-                readJSON(
-                    CONFIG_FILE
-                );
-
-            if (saved.model) {
-                config =
-                    Object.assign(
-                        {},
-                        config,
-                        saved.model
-                    );
-            }
-        } catch {}
-    }
-
-    const overrideKeys = [
-        "vocabSize",
-        "contextSize",
-        "embeddingSize",
-        "layers",
-        "heads",
-        "headSize",
-        "feedForwardSize",
-        "learningRate",
-        "gradientClip"
-    ];
-
-    for (const key of overrideKeys) {
-        if (OPTIONS[key] !== undefined) {
-            config[key] =
-                OPTIONS[key];
-        }
-    }
 
     const model =
         new Model(config);
-
-    if (fs.existsSync(MODEL_FILE)) {
-        try {
-            const saved =
-                readJSON(
-                    MODEL_FILE
-                );
-
-            if (
-                typeof model.load ===
-                "function"
-            ) {
-                model.load(saved);
-            }
-        } catch (error) {
-            console.warn(
-                "Altes Modell konnte nicht geladen werden:",
-                error.message
-            );
-        }
-    }
 
     return {
         model,
@@ -694,10 +639,12 @@ function createModel(tokenizer) {
 
 
 /* =========================================================
-   SEQUENZEN
+   TRAININGSSEQUENZEN
    ========================================================= */
 
-function formatExample(example) {
+function formatExample(
+    example
+) {
     return (
         "<|user|>\n" +
         example.question +
@@ -708,14 +655,16 @@ function formatExample(example) {
     );
 }
 
-function makeSequences(
+function createSequences(
     tokenizer,
     examples,
     sequenceLength
 ) {
     const sequences = [];
 
-    for (const example of examples) {
+    for (
+        const example of examples
+    ) {
         if (stopRequested) {
             break;
         }
@@ -734,24 +683,23 @@ function makeSequences(
                 );
         } catch (error) {
             console.warn(
-                "Tokenisierung fehlgeschlagen:",
+                "Encode-Fehler:",
                 error.message
             );
 
             continue;
         }
 
-        if (
-            !Array.isArray(tokens) &&
-            !(tokens instanceof Uint32Array)
-        ) {
+        if (!tokens) {
             continue;
         }
 
         const list =
             Array.from(tokens);
 
-        if (list.length < 2) {
+        if (
+            list.length < 2
+        ) {
             continue;
         }
 
@@ -766,21 +714,11 @@ function makeSequences(
             continue;
         }
 
-        const step =
-            Math.max(
-                1,
-                sequenceLength - 16
-            );
-
         for (
             let start = 0;
             start < list.length;
-            start += step
+            start += sequenceLength
         ) {
-            if (stopRequested) {
-                break;
-            }
-
             const part =
                 list.slice(
                     start,
@@ -788,7 +726,9 @@ function makeSequences(
                         sequenceLength
                 );
 
-            if (part.length >= 2) {
+            if (
+                part.length >= 2
+            ) {
                 sequences.push(
                     part
                 );
@@ -801,40 +741,140 @@ function makeSequences(
 
 
 /* =========================================================
+   MODELL SPEICHERN
+   ========================================================= */
+
+function serializeModel(
+    model
+) {
+    if (
+        typeof model.toJSON ===
+        "function"
+    ) {
+        return model.toJSON();
+    }
+
+    if (
+        typeof model.serialize ===
+        "function"
+    ) {
+        return model.serialize();
+    }
+
+    if (
+        typeof model.export ===
+        "function"
+    ) {
+        return model.export();
+    }
+
+    throw new Error(
+        "Modell besitzt keine Exportfunktion."
+    );
+}
+
+function saveEverything(
+    model,
+    tokenizer,
+    config,
+    state
+) {
+    fs.mkdirSync(
+        GELERNT,
+        {
+            recursive:
+                true
+        }
+    );
+
+    writeJSON(
+        MODEL_FILE,
+        serializeModel(
+            model
+        )
+    );
+
+    exportTokenizer(
+        tokenizer
+    );
+
+    writeJSON(
+        CONFIG_FILE,
+        {
+            version:
+                1,
+
+            updatedAt:
+                new Date().toISOString(),
+
+            model:
+                config,
+
+            training: {
+                epochs:
+                    OPTIONS.epochs ||
+                    10,
+
+                sequenceLength:
+                    OPTIONS.sequenceLength ||
+                    256,
+
+                learningRate:
+                    OPTIONS.learningRate ||
+                    0.0003
+            }
+        }
+    );
+
+    writeJSON(
+        STATE_FILE,
+        {
+            version:
+                1,
+
+            epoch:
+                state.epoch,
+
+            step:
+                state.step,
+
+            loss:
+                state.loss,
+
+            examples:
+                state.examples,
+
+            sequences:
+                state.sequences,
+
+            updatedAt:
+                new Date().toISOString()
+        }
+    );
+}
+
+
+/* =========================================================
    TRAINING
    ========================================================= */
 
-async function trainModel(
+async function train(
     model,
     tokenizer,
     sequences,
-    epochs
+    config
 ) {
-    if (
-        typeof model.trainStep !==
-        "function" &&
-        typeof model.trainBackprop !==
-        "function"
-    ) {
-        throw new Error(
-            "Das Modell besitzt keine trainierbare trainStep/trainBackprop-Funktion."
-        );
-    }
-
-    let globalStep = 0;
-    let lastLoss = null;
-
-    const learningRate =
-        Number(
-            OPTIONS.learningRate ||
-            model.config?.learningRate ||
-            0.0003
+    const epochs =
+        Math.max(
+            1,
+            Number(
+                OPTIONS.epochs ||
+                10
+            )
         );
 
-    if (model.config) {
-        model.config.learningRate =
-            learningRate;
-    }
+    let step = 0;
+    let loss = null;
 
     for (
         let epoch = 1;
@@ -845,47 +885,21 @@ async function trainModel(
             break;
         }
 
-        const order =
-            sequences.map(
-                (_, index) =>
-                    index
-            );
-
         for (
-            let i = order.length - 1;
-            i > 0;
-            i--
-        ) {
-            const j =
-                Math.floor(
-                    Math.random() *
-                    (i + 1)
-                );
-
-            [
-                order[i],
-                order[j]
-            ] = [
-                order[j],
-                order[i]
-            ];
-        }
-
-        for (
-            let position = 0;
-            position < order.length;
-            position++
+            let index = 0;
+            index < sequences.length;
+            index++
         ) {
             if (stopRequested) {
                 break;
             }
 
             const sequence =
-                sequences[
-                    order[position]
-                ];
+                sequences[index];
 
-            if (sequence.length < 2) {
+            if (
+                sequence.length < 2
+            ) {
                 continue;
             }
 
@@ -912,95 +926,122 @@ async function trainModel(
                             input,
                             target,
                             {
-                                learningRate
+                                learningRate:
+                                    config.learningRate
                             }
                         );
-                } else {
+                } else if (
+                    typeof model.trainBackprop ===
+                    "function"
+                ) {
                     result =
                         model.trainBackprop(
                             input,
                             target,
                             {
-                                learningRate
+                                learningRate:
+                                    config.learningRate
                             }
                         );
+                } else {
+                    throw new Error(
+                        "trainStep/trainBackprop fehlt."
+                    );
                 }
 
                 if (
                     typeof result ===
                     "number"
                 ) {
-                    lastLoss =
-                        result;
+                    loss = result;
                 } else if (
                     result &&
                     typeof result.loss ===
                     "number"
                 ) {
-                    lastLoss =
-                        result.loss;
+                    loss = result.loss;
                 }
 
             } catch (error) {
                 console.warn(
-                    "Trainingsschritt:",
+                    "Trainingsschritt fehlgeschlagen:",
                     error.message
                 );
             }
 
-            globalStep++;
+            step++;
 
-            if (
-                globalStep % 5 ===
-                0
-            ) {
-                send(
-                    "progress",
-                    {
-                        phase:
-                            "training",
-
-                        epoch,
-
-                        step:
-                            globalStep,
-
-                        loss:
-                            lastLoss,
-
-                        totalEpochs:
-                            epochs,
-
-                        progress:
-                            Math.min(
-                                99,
-                                Math.round(
-                                    (
-                                        (
-                                            epoch -
-                                            1
-                                        ) /
-                                        epochs
-                                    ) *
-                                        100
-                                )
-                            )
-                    }
+            const progress =
+                Math.round(
+                    (
+                        (
+                            epoch -
+                            1
+                        ) /
+                        epochs +
+                        (
+                            index + 1
+                        ) /
+                        sequences.length /
+                        epochs
+                    ) *
+                    100
                 );
 
-                await sleep(0);
+            send(
+                "progress",
+                {
+                    phase:
+                        "training",
+
+                    progress:
+                        Math.min(
+                            99,
+                            progress
+                        ),
+
+                    epoch,
+
+                    step,
+
+                    totalEpochs:
+                        epochs,
+
+                    loss,
+
+                    message:
+                        "Training: Epoche " +
+                        epoch +
+                        "/" +
+                        epochs
+                }
+            );
+
+            if (
+                step % 10 ===
+                0
+            ) {
+                await new Promise(
+                    resolve =>
+                        setImmediate(
+                            resolve
+                        )
+                );
             }
         }
 
-        saveModel(
+        saveEverything(
             model,
             tokenizer,
+            config,
             {
                 epoch,
-                step:
-                    globalStep,
-                loss:
-                    lastLoss
+                step,
+                loss,
+                examples:
+                    sequences.length,
+                sequences:
+                    sequences.length
             }
         );
 
@@ -1008,12 +1049,10 @@ async function trainModel(
             "epoch",
             {
                 epoch,
-
-                step:
-                    globalStep,
-
-                loss:
-                    lastLoss
+                step,
+                loss,
+                totalEpochs:
+                    epochs
             }
         );
     }
@@ -1022,154 +1061,35 @@ async function trainModel(
         epoch:
             Math.min(
                 epochs,
-                Math.max(
-                    0,
-                    epochs
+                epochSafe(
+                    epochs,
+                    stopRequested
                 )
             ),
 
-        step:
-            globalStep,
+        step,
 
-        loss:
-            lastLoss
+        loss
     };
 }
 
-
-/* =========================================================
-   SPEICHERN
-   ========================================================= */
-
-function serializeModel(model) {
-    if (
-        typeof model.toJSON ===
-        "function"
-    ) {
-        return model.toJSON();
-    }
-
-    if (
-        typeof model.serialize ===
-        "function"
-    ) {
-        return model.serialize();
-    }
-
-    if (
-        typeof model.export ===
-        "function"
-    ) {
-        return model.export();
-    }
-
-    throw new Error(
-        "Das Modell besitzt keine JSON-Serialisierung."
-    );
-}
-
-function saveModel(
-    model,
-    tokenizer,
-    state
+function epochSafe(
+    epochs,
+    stopped
 ) {
-    fs.mkdirSync(
-        GELERNT,
-        {
-            recursive:
-                true
-        }
-    );
-
-    const modelData =
-        serializeModel(
-            model
+    if (stopped) {
+        return Math.max(
+            0,
+            epochs - 1
         );
+    }
 
-    atomicWrite(
-        MODEL_FILE,
-        JSON.stringify(
-            modelData
-        )
-    );
-
-    exportTokenizer(
-        tokenizer
-    );
-
-    const config = {
-        version:
-            1,
-
-        updatedAt:
-            new Date().toISOString(),
-
-        model:
-            model.config || {},
-
-        training: {
-            learningRate:
-                OPTIONS.learningRate ||
-                model.config?.learningRate ||
-                0.0003,
-
-            contextSize:
-                OPTIONS.contextSize ||
-                model.config?.contextSize ||
-                256
-        }
-    };
-
-    atomicWrite(
-        CONFIG_FILE,
-        JSON.stringify(
-            config,
-            null,
-            2
-        )
-    );
-
-    const trainingState = {
-        version:
-            1,
-
-        epoch:
-            state.epoch,
-
-        step:
-            state.step,
-
-        loss:
-            state.loss,
-
-        sourceFolder:
-            DATEN,
-
-        sourceFiles:
-            getDataFiles().map(
-                file =>
-                    path.basename(
-                        file
-                    )
-            ),
-
-        updatedAt:
-            new Date().toISOString()
-    };
-
-    atomicWrite(
-        STATE_FILE,
-        JSON.stringify(
-            trainingState,
-            null,
-            2
-        )
-    );
+    return epochs;
 }
 
 
 /* =========================================================
-   HAUPTPROGRAMM
+   START
    ========================================================= */
 
 async function main() {
@@ -1194,26 +1114,14 @@ async function main() {
         );
 
         const dataset =
-            loadTrainingData();
-
-        if (stopRequested) {
-            send(
-                "stopped",
-                {
-                    message:
-                        "Training gestoppt."
-                }
-            );
-
-            return;
-        }
+            loadTrainingExamples();
 
         if (
             dataset.examples.length ===
             0
         ) {
             throw new Error(
-                "Keine Trainingsdaten in DATEN gefunden."
+                "Keine Trainingsdaten gefunden."
             );
         }
 
@@ -1222,6 +1130,9 @@ async function main() {
             {
                 phase:
                     "daten",
+
+                progress:
+                    5,
 
                 examples:
                     dataset.examples.length,
@@ -1232,41 +1143,30 @@ async function main() {
             }
         );
 
+        if (stopRequested) {
+            send(
+                "stopped",
+                {
+                    message:
+                        "Training gestoppt."
+                }
+            );
+
+            return;
+        }
+
+        /* TOKENIZER */
+
         const tokenizer =
-            createTokenizer();
+            loadTokenizer();
 
-        send(
-            "progress",
-            {
-                phase:
-                    "tokenizer",
-
-                examples:
-                    dataset.examples.length,
-
-                message:
-                    "Tokenizer wird trainiert..."
-            }
-        );
-
-        await trainTokenizer(
+        await trainTokenizerSafe(
             tokenizer,
             dataset.examples
         );
 
         exportTokenizer(
             tokenizer
-        );
-
-        send(
-            "progress",
-            {
-                phase:
-                    "tokenizer",
-
-                message:
-                    "Tokenizer gespeichert."
-            }
         );
 
         if (stopRequested) {
@@ -1281,11 +1181,16 @@ async function main() {
             return;
         }
 
+        /* SEQUENZEN */
+
         send(
             "progress",
             {
                 phase:
                     "sequenzen",
+
+                progress:
+                    0,
 
                 message:
                     "Trainingssequenzen werden erstellt..."
@@ -1299,7 +1204,7 @@ async function main() {
             );
 
         const sequences =
-            makeSequences(
+            createSequences(
                 tokenizer,
                 dataset.examples,
                 sequenceLength
@@ -1310,7 +1215,7 @@ async function main() {
             0
         ) {
             throw new Error(
-                "Es konnten keine Trainingssequenzen erzeugt werden."
+                "Keine Trainingssequenzen erzeugt."
             );
         }
 
@@ -1320,6 +1225,9 @@ async function main() {
                 phase:
                     "sequenzen",
 
+                progress:
+                    100,
+
                 sequences:
                     sequences.length,
 
@@ -1328,6 +1236,8 @@ async function main() {
                     " Trainingssequenzen erstellt."
             }
         );
+
+        /* MODELL */
 
         if (stopRequested) {
             send(
@@ -1347,6 +1257,9 @@ async function main() {
                 phase:
                     "modell",
 
+                progress:
+                    0,
+
                 message:
                     "Modell wird erstellt..."
             }
@@ -1360,39 +1273,21 @@ async function main() {
                 tokenizer
             );
 
-        atomicWrite(
-            CONFIG_FILE,
-            JSON.stringify(
-                {
-                    version:
-                        1,
+        send(
+            "progress",
+            {
+                phase:
+                    "modell",
 
-                    updatedAt:
-                        new Date().toISOString(),
+                progress:
+                    100,
 
-                    model:
-                        config,
-
-                    training: {
-                        learningRate:
-                            config.learningRate,
-
-                        sequenceLength
-                    }
-                },
-                null,
-                2
-            )
+                message:
+                    "Modell bereit."
+            }
         );
 
-        const epochs =
-            Math.max(
-                1,
-                Number(
-                    OPTIONS.epochs ||
-                    10
-                )
-            );
+        /* TRAINING */
 
         send(
             "progress",
@@ -1400,41 +1295,48 @@ async function main() {
                 phase:
                     "training",
 
+                progress:
+                    0,
+
                 epoch:
                     0,
 
                 step:
                     0,
 
-                loss:
-                    null,
-
-                totalEpochs:
-                    epochs,
-
-                sequences:
-                    sequences.length,
-
-                progress:
-                    0,
-
                 message:
-                    "Training des Modells gestartet..."
+                    "Modelltraining gestartet..."
             }
         );
 
         const result =
-            await trainModel(
+            await train(
                 model,
                 tokenizer,
                 sequences,
-                epochs
+                config
             );
 
-        saveModel(
+        saveEverything(
             model,
             tokenizer,
-            result
+            config,
+            {
+                epoch:
+                    result.epoch,
+
+                step:
+                    result.step,
+
+                loss:
+                    result.loss,
+
+                examples:
+                    dataset.examples.length,
+
+                sequences:
+                    sequences.length
+            }
         );
 
         if (stopRequested) {
@@ -1451,10 +1353,9 @@ async function main() {
                         result.loss,
 
                     message:
-                        "Training gestoppt."
+                        "Training gestoppt. Daten wurden gespeichert."
                 }
             );
-
         } else {
             send(
                 "finished",
@@ -1468,15 +1369,18 @@ async function main() {
                     loss:
                         result.loss,
 
+                    progress:
+                        100,
+
                     message:
-                        "Training abgeschlossen."
+                        "Training vollständig abgeschlossen."
                 }
             );
         }
 
     } catch (error) {
         console.error(
-            "TRAIN-WORKER FEHLER:",
+            "TRAIN-WORKER ERROR:",
             error
         );
 
