@@ -2,278 +2,353 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>GhostCut Studio</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Meine KI</title>
+
 <style>
-*{box-sizing:border-box}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#101114;color:#eee;font-family:Arial,sans-serif}
-button,input,select,textarea{font:inherit}
-button{background:#252832;color:#fff;border:0;border-radius:6px;padding:8px 11px;cursor:pointer}
-button:hover{background:#343844}
+*{
+    box-sizing:border-box;
+}
+
+body{
+    margin:0;
+    height:100vh;
+    background:#fff;
+    color:#1f1f1f;
+    font-family:Arial,Helvetica,sans-serif;
+}
 
 .app{
-display:grid;
-grid-template-columns:250px 1fr 290px;
-grid-template-rows:58px 1fr 300px;
-width:100vw;height:100vh
+    height:100vh;
+    display:flex;
+    flex-direction:column;
 }
 
-.top{
-grid-column:1/4;
-display:flex;align-items:center;gap:8px;
-padding:9px 12px;background:#191b20;
-border-bottom:1px solid #30333b
-}
-.logo{font-size:20px;font-weight:bold;margin-right:15px}
-.logo span{color:#8b5cf6}
-.spacer{flex:1}
-.project{background:#242730;border:1px solid #383c48;color:#fff;padding:7px;border-radius:5px}
+/* HEADER */
 
-.left{
-grid-column:1;grid-row:2;
-background:#181a20;border-right:1px solid #30333b;overflow:auto
+header{
+    height:68px;
+    display:flex;
+    align-items:center;
+    padding:0 24px;
+    border-bottom:1px solid #eee;
+    background:#fff;
 }
-.right{
-grid-column:3;grid-row:2;
-background:#181a20;border-left:1px solid #30333b;overflow:auto
-}
-.center{
-grid-column:2;grid-row:2;
-display:flex;flex-direction:column;min-width:0;background:#0e1014
+
+.logo{
+    width:38px;
+    height:38px;
+    margin-right:12px;
+    border-radius:50%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:20px;
+    font-weight:bold;
+
+    background:
+        linear-gradient(
+            135deg,
+            #4285f4,
+            #8e7dff 45%,
+            #d965ff 70%,
+            #ff8b8b
+        );
+
+    color:white;
 }
 
 .title{
-color:#9297a4;font-size:11px;text-transform:uppercase;
-letter-spacing:.08em;padding:14px 12px 8px
+    font-size:20px;
+    color:#333;
 }
 
-.tools{
-display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:9px
-}
-.tool{
-height:65px;display:flex;flex-direction:column;
-align-items:center;justify-content:center;gap:4px
-}
-.tool b{font-size:20px}
-.tool small{font-size:10px;color:#aaa}
-
-.media{padding:8px}
-.mediaItem{
-padding:8px;margin-bottom:6px;background:#242730;
-border:1px solid #343844;border-radius:6px;cursor:pointer
-}
-.mediaItem:hover{border-color:#805ee8}
-.mediaName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
-
-.preview{
-flex:1;display:flex;align-items:center;justify-content:center;
-padding:20px;background:radial-gradient(circle,#252933,#0e1014 70%);
-min-height:0
-}
-.stage{
-position:relative;width:min(88%,1000px);aspect-ratio:16/9;
-background:#000;box-shadow:0 15px 50px #000;overflow:hidden
-}
-#canvas{width:100%;height:100%;display:block}
-
-#objectLayer{
-position:absolute;
-inset:0;
-pointer-events:none
+.status{
+    margin-left:auto;
+    color:#777;
+    font-size:13px;
 }
 
-.objectBox{
-position:absolute;
-transform:translate(-50%,-50%);
-border:1px dashed transparent;
-pointer-events:auto;
-cursor:move;
-user-select:none;
-white-space:pre;
-line-height:1.1
+/* CHAT */
+
+.chat{
+    flex:1;
+    overflow-y:auto;
+    padding:45px 20px 150px;
 }
 
-.objectBox.selected{
-border:2px dashed #8b5cf6
+.chat-inner{
+    width:100%;
+    max-width:850px;
+    margin:auto;
 }
 
-.controls{
-height:58px;display:flex;align-items:center;
-justify-content:center;gap:7px;
-background:#191b20;border-top:1px solid #30333b
+/* START */
+
+.empty{
+    min-height:65vh;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    flex-direction:column;
+    text-align:center;
 }
 
-.play{
-width:42px;height:42px;border-radius:50%;
-background:#7650e8
+.empty-icon{
+    font-size:64px;
+    margin-bottom:15px;
+
+    background:
+        linear-gradient(
+            135deg,
+            #4285f4,
+            #8e7dff,
+            #d65cff,
+            #ff7d7d
+        );
+
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
 }
 
-.time{
-font-family:monospace;
-margin-left:15px;
-color:#bbb
+.empty h1{
+    margin:0;
+    font-size:42px;
+    font-weight:600;
+
+    background:
+        linear-gradient(
+            90deg,
+            #4285f4,
+            #8e7dff,
+            #d65cff
+        );
+
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
 }
 
-.inspector{padding:10px 13px}
-.field{margin-bottom:13px}
-.field label{
-display:block;font-size:11px;
-color:#969ba8;margin-bottom:5px
-}
-.field input,.field select,.field textarea{
-width:100%;padding:7px;
-background:#242730;border:1px solid #393d48;
-color:#fff;border-radius:5px
-}
-.row{
-display:grid;
-grid-template-columns:1fr 1fr;
-gap:8px
-}
-input[type=color]{
-height:34px;
-padding:2px
+.empty p{
+    color:#777;
+    font-size:17px;
 }
 
-.timeline{
-grid-column:1/4;grid-row:3;
-display:grid;
-grid-template-columns:145px 1fr;
-grid-template-rows:34px 1fr;
-background:#15171c;
-border-top:1px solid #353842;
-min-height:0
+/* NACHRICHTEN */
+
+.message{
+    display:flex;
+    margin:25px 0;
 }
 
-.timelineTop{
-grid-column:1/3;
-background:#20232a;
-border-bottom:1px solid #343740;
-display:flex;
-align-items:center;
-padding-left:7px;
-gap:5px
+.message.user{
+    justify-content:flex-end;
 }
 
-.labels{background:#1b1d22}
-
-.label{
-height:57px;
-border-bottom:1px solid #30333b;
-display:flex;
-align-items:center;
-padding:0 10px;
-font-size:12px;
-gap:7px
+.bubble{
+    max-width:75%;
+    padding:15px 19px;
+    border-radius:22px;
+    line-height:1.55;
+    white-space:pre-wrap;
+    word-break:break-word;
+    font-size:16px;
 }
 
-.area{
-overflow:auto;
-background:#111318
+.user .bubble{
+    background:#f0f1f3;
+    color:#202124;
+    border-bottom-right-radius:6px;
 }
 
-.tcanvas{
-position:relative;
-min-width:1200px;
-height:100%
+.ai .bubble{
+    background:transparent;
+    color:#303030;
+    padding-left:5px;
 }
 
-.track{
-height:57px;
-border-bottom:1px solid #30333b;
-position:relative
+/* KI ICON */
+
+.ai{
+    align-items:flex-start;
 }
 
-.track:nth-child(even){background:#14161b}
+.ai::before{
+    content:"✦";
+    min-width:30px;
+    height:30px;
+    margin-right:9px;
+    margin-top:4px;
 
-.clip{
-position:absolute;
-top:7px;
-height:43px;
-border-radius:5px;
-cursor:grab;
-overflow:hidden;
-user-select:none
-}
+    display:flex;
+    align-items:center;
+    justify-content:center;
 
-.clip.video{
-background:#294f74;
-border:1px solid #4b8ac2
-}
-.clip.audio{
-background:#286047;
-border:1px solid #48a071
-}
-.clip.text{
-background:#765d24;
-border:1px solid #c09a3d
-}
-.clip.emoji{
-background:#713d59;
-border:1px solid #bd6392
+    font-size:18px;
+
+    background:
+        linear-gradient(
+            135deg,
+            #4285f4,
+            #9b7cff,
+            #e56cff,
+            #ff8b8b
+        );
+
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
 }
 
-.clip.selected{
-outline:2px solid #fff
+/* INPUT */
+
+.input-area{
+    position:fixed;
+    bottom:0;
+    left:0;
+    right:0;
+
+    padding:18px 20px 22px;
+
+    background:
+        linear-gradient(
+            transparent,
+            rgba(255,255,255,.96) 30%
+        );
 }
 
-.clipTitle{
-padding:5px;
-font-size:11px;
-white-space:nowrap;
-overflow:hidden;
-text-overflow:ellipsis
+.input-container{
+    max-width:850px;
+    margin:auto;
 }
 
-.handle{
-position:absolute;
-top:0;
-width:7px;
-height:100%;
-background:#ffffff33;
-cursor:ew-resize
-}
-.handle.left{left:0}
-.handle.right{right:0}
+.input-box{
+    display:flex;
+    align-items:flex-end;
+    gap:10px;
 
-.playhead{
-position:absolute;
-top:0;
-bottom:0;
-width:2px;
-background:#ff5069;
-z-index:50;
-pointer-events:none
+    padding:9px 10px 9px 18px;
+
+    background:#f5f6f7;
+
+    border:1px solid #e1e3e6;
+
+    border-radius:28px;
+
+    box-shadow:
+        0 2px 10px rgba(0,0,0,.05);
+
+    transition:.2s;
 }
 
-.playhead:before{
-content:"";
-position:absolute;
-top:-4px;
-left:-5px;
-width:12px;
-height:12px;
-background:#ff5069;
-transform:rotate(45deg)
+.input-box:focus-within{
+    background:#fff;
+
+    border-color:#c8c9cc;
+
+    box-shadow:
+        0 3px 16px rgba(0,0,0,.08);
 }
 
-@media(max-width:900px){
-.app{
-grid-template-columns:180px 1fr;
-grid-template-rows:52px 1fr 260px
-}
-.top{grid-column:1/3}
-.right{display:none}
-.timeline{grid-column:1/3}
+textarea{
+    flex:1;
+
+    border:0;
+    outline:0;
+
+    resize:none;
+
+    background:transparent;
+
+    color:#222;
+
+    font-size:16px;
+
+    line-height:1.4;
+
+    padding:10px 0;
+
+    min-height:42px;
+    max-height:140px;
+
+    font-family:Arial,Helvetica,sans-serif;
 }
 
-@media(max-width:650px){
-.left{display:none}
-.app{
-grid-template-columns:1fr;
-grid-template-rows:52px 1fr 240px
+textarea::placeholder{
+    color:#777;
 }
-.top,.timeline{grid-column:1}
+
+/* SEND BUTTON */
+
+.send{
+    width:45px;
+    height:45px;
+
+    flex-shrink:0;
+
+    border:0;
+
+    border-radius:50%;
+
+    background:#1f1f1f;
+
+    color:white;
+
+    font-size:18px;
+
+    cursor:pointer;
+
+    transition:.2s;
+}
+
+.send:hover{
+    transform:scale(1.05);
+}
+
+.send:active{
+    transform:scale(.94);
+}
+
+.send.disabled{
+    background:#ddd;
+    color:#999;
+}
+
+/* SCROLLBAR */
+
+.chat::-webkit-scrollbar{
+    width:8px;
+}
+
+.chat::-webkit-scrollbar-thumb{
+    background:#ddd;
+    border-radius:10px;
+}
+
+/* MOBILE */
+
+@media(max-width:600px){
+
+    header{
+        padding:0 16px;
+    }
+
+    .chat{
+        padding:30px 12px 140px;
+    }
+
+    .empty h1{
+        font-size:34px;
+    }
+
+    .bubble{
+        max-width:88%;
+    }
+
+    .input-area{
+        padding:12px;
+    }
 }
 </style>
 </head>
@@ -282,1851 +357,161 @@ grid-template-rows:52px 1fr 240px
 
 <div class="app">
 
-<header class="top">
+<header>
 
-<div class="logo">
-Ghost<span>Cut</span>
-</div>
+    <div class="logo">✦</div>
 
-<button onclick="newProject()">Neu</button>
-<button onclick="undo()">↶</button>
-<button onclick="redo()">↷</button>
+    <div class="title">
+        Meine KI
+    </div>
 
-<input
-id="projectName"
-class="project"
-value="Mein Projekt">
-
-<div class="spacer"></div>
-
-<button onclick="saveProject()">💾</button>
-<button onclick="loadProject()">📂</button>
-<button onclick="exportVideo()">⬇ Exportieren</button>
+    <div class="status">
+        Bereit
+    </div>
 
 </header>
 
-<aside class="left">
+<main class="chat" id="chat">
 
-<div class="title">Medien</div>
+    <div class="chat-inner" id="chatInner">
 
-<div class="tools">
+        <div class="empty" id="empty">
 
-<button class="tool" onclick="videoInput.click()">
-<b>🎬</b>
-<small>Video</small>
-</button>
+            <div class="empty-icon">✦</div>
 
-<button class="tool" onclick="audioInput.click()">
-<b>🎵</b>
-<small>Audio</small>
-</button>
+            <h1>Hallo!</h1>
 
-<button class="tool" onclick="addText()">
-<b>T</b>
-<small>Text</small>
-</button>
+            <p>Wie kann ich dir helfen?</p>
 
-<button class="tool" onclick="addEmoji()">
-<b>😀</b>
-<small>Emoji</small>
-</button>
+        </div>
 
-<button class="tool" onclick="addTransition()">
-<b>🔀</b>
-<small>Übergang</small>
-</button>
-
-<button class="tool" onclick="splitSelected()">
-<b>✂️</b>
-<small>Teilen</small>
-</button>
-
-</div>
-
-<input id="videoInput" type="file" accept="video/*" hidden>
-<input id="audioInput" type="file" accept="audio/*" hidden>
-<input id="projectInput" type="file" accept=".json" hidden>
-
-<div class="title">Medien</div>
-
-<div id="mediaList" class="media"></div>
-
-<div class="title">Timeline Zoom</div>
-
-<div style="padding:10px">
-<button onclick="zoomTimeline(-1)">−</button>
-<button onclick="zoomTimeline(1)">＋</button>
-<button onclick="fitTimeline()">Fit</button>
-</div>
-
-</aside>
-
-<main class="center">
-
-<div class="preview">
-
-<div class="stage">
-
-<canvas
-id="canvas"
-width="1280"
-height="720">
-</canvas>
-
-<div id="objectLayer"></div>
-
-</div>
-
-</div>
-
-<div class="controls">
-
-<button onclick="goStart()">⏮</button>
-<button onclick="step(-1)">◀</button>
-
-<button
-id="playButton"
-class="play"
-onclick="togglePlay()">
-▶
-</button>
-
-<button onclick="step(1)">▶</button>
-<button onclick="goEnd()">⏭</button>
-
-<div id="time" class="time">
-00:00.000
-</div>
-
-</div>
+    </div>
 
 </main>
 
-<aside class="right">
+<div class="input-area">
 
-<div class="title">
-Inspector
-</div>
+    <div class="input-container">
 
-<div class="inspector">
+        <div class="input-box">
 
-<div class="field">
-<label>Name</label>
-<input id="propName" oninput="updateSelected()">
-</div>
+            <textarea
+                id="input"
+                rows="1"
+                placeholder="Frag mich etwas..."
+            ></textarea>
 
-<div class="field">
-<label>Start</label>
-<input id="propStart"
-type="number"
-step=".01"
-oninput="updateSelected()">
-</div>
+            <button
+                class="send disabled"
+                id="send"
+            >↑</button>
 
-<div class="field">
-<label>Dauer</label>
-<input id="propDuration"
-type="number"
-step=".01"
-oninput="updateSelected()">
-</div>
+        </div>
 
-<div id="textFields">
-
-<div class="field">
-<label>Text</label>
-<textarea
-id="propText"
-rows="4"
-oninput="updateSelected()"></textarea>
-</div>
-
-<div class="field">
-<label>Textgröße</label>
-<input
-id="propSize"
-type="number"
-min="5"
-max="500"
-oninput="updateSelected()">
-</div>
-
-<div class="field">
-<label>Textfarbe</label>
-<input
-id="propColor"
-type="color"
-oninput="updateSelected()">
-</div>
+    </div>
 
 </div>
-
-<div id="emojiFields">
-
-<div class="field">
-<label>Emoji</label>
-<input
-id="propEmoji"
-oninput="updateSelected()">
-</div>
-
-<div class="field">
-<label>Emoji-Größe</label>
-<input
-id="propEmojiSize"
-type="number"
-min="10"
-max="500"
-oninput="updateSelected()">
-</div>
-
-</div>
-
-<div class="field">
-<label>Position X</label>
-<input
-id="propX"
-type="number"
-min="0"
-max="1280"
-oninput="updateSelected()">
-</div>
-
-<div class="field">
-<label>Position Y</label>
-<input
-id="propY"
-type="number"
-min="0"
-max="720"
-oninput="updateSelected()">
-</div>
-
-<div class="field">
-<label>Übergang</label>
-<select
-id="propTransition"
-onchange="updateSelected()">
-<option value="none">Keiner</option>
-<option value="fade">Fade</option>
-<option value="slide">Slide</option>
-<option value="zoom">Zoom</option>
-</select>
-</div>
-
-<button onclick="deleteSelected()">
-🗑 Löschen
-</button>
-
-</div>
-
-</aside>
-
-<section class="timeline">
-
-<div class="timelineTop">
-
-<button onclick="zoomTimeline(-1)">−</button>
-<button onclick="zoomTimeline(1)">＋</button>
-<button onclick="fitTimeline()">Fit</button>
-
-</div>
-
-<div class="labels">
-
-<div class="label">🎬 Video 1</div>
-<div class="label">🎵 Audio 1</div>
-<div class="label">📝 Text 1</div>
-<div class="label">😀 Overlay</div>
-
-</div>
-
-<div class="area" id="timelineArea">
-
-<div class="tcanvas" id="timelineCanvas">
-
-<div class="track" data-track="video"></div>
-<div class="track" data-track="audio"></div>
-<div class="track" data-track="text"></div>
-<div class="track" data-track="emoji"></div>
-
-<div
-id="playhead"
-class="playhead">
-</div>
-
-</div>
-
-</div>
-
-</section>
 
 </div>
 
 <script>
 
-const canvas=document.getElementById("canvas");
-const ctx=canvas.getContext("2d");
+const input = document.getElementById("input");
+const send = document.getElementById("send");
+const chatInner = document.getElementById("chatInner");
+const empty = document.getElementById("empty");
 
-const objectLayer=document.getElementById("objectLayer");
+function updateButton(){
 
-const videoInput=document.getElementById("videoInput");
-const audioInput=document.getElementById("audioInput");
-const projectInput=document.getElementById("projectInput");
-
-const timelineCanvas=
-document.getElementById("timelineCanvas");
-
-const timelineArea=
-document.getElementById("timelineArea");
-
-const playhead=
-document.getElementById("playhead");
-
-let clips=[];
-let media=[];
-let selected=null;
-
-let videos=new Map();
-let audios=new Map();
-
-let currentTime=0;
-let duration=30;
-let playing=false;
-let raf=null;
-let lastFrame=0;
-
-let pixelsPerSecond=80;
-
-let history=[];
-let future=[];
-
-let drag=null;
-let previewDrag=null;
-
-
-/* =========================
-   HILFSFUNKTIONEN
-========================= */
-
-function uid(){
-return Math.random().toString(36).slice(2)+Date.now()
+    if(input.value.trim()){
+        send.classList.remove("disabled");
+    }else{
+        send.classList.add("disabled");
+    }
 }
 
-function clamp(v,a,b){
-return Math.max(a,Math.min(b,v))
-}
+input.addEventListener("input",function(){
 
-function formatTime(t){
-t=Math.max(0,t);
-let m=Math.floor(t/60);
-let s=Math.floor(t%60);
-let ms=Math.floor((t%1)*1000);
+    this.style.height="42px";
 
-return String(m).padStart(2,"0")+":"+
-String(s).padStart(2,"0")+"."+
-String(ms).padStart(3,"0")
-}
+    this.style.height =
+        Math.min(this.scrollHeight,140)+"px";
 
-function snapshot(){
-history.push(JSON.stringify(clips));
-if(history.length>80)history.shift();
-future=[]
-}
-
-
-/* =========================
-   VIDEO IMPORT
-========================= */
-
-videoInput.onchange=e=>{
-
-let file=e.target.files[0];
-if(!file)return;
-
-let id=uid();
-let url=URL.createObjectURL(file);
-
-let v=document.createElement("video");
-
-v.src=url;
-v.preload="metadata";
-v.muted=true;
-v.playsInline=true;
-
-v.onloadedmetadata=()=>{
-
-videos.set(id,v);
-
-let m={
-id,
-type:"video",
-name:file.name,
-url,
-duration:v.duration
-};
-
-media.push(m);
-
-renderMedia();
-addVideoClip(m);
-}
-}
-
-
-/* =========================
-   AUDIO IMPORT
-========================= */
-
-audioInput.onchange=e=>{
-
-let file=e.target.files[0];
-if(!file)return;
-
-let id=uid();
-let url=URL.createObjectURL(file);
-
-let a=new Audio();
-
-a.src=url;
-a.preload="metadata";
-
-a.onloadedmetadata=()=>{
-
-audios.set(id,a);
-
-let m={
-id,
-type:"audio",
-name:file.name,
-url,
-duration:a.duration
-};
-
-media.push(m);
-
-renderMedia();
-addAudioClip(m);
-}
-}
-
-
-/* =========================
-   MEDIENLISTE
-========================= */
-
-function renderMedia(){
-
-let box=document.getElementById("mediaList");
-
-box.innerHTML="";
-
-media.forEach(m=>{
-
-let el=document.createElement("div");
-
-el.className="mediaItem";
-
-el.innerHTML=
-(m.type==="video"?"🎬 ":"🎵 ")+
-`<div class="mediaName">${m.name}</div>
-<small>${formatTime(m.duration)}</small>`;
-
-el.onclick=()=>{
-m.type==="video"
-?addVideoClip(m)
-:addAudioClip(m)
-};
-
-box.appendChild(el);
-})
-}
-
-
-/* =========================
-   CLIPS
-========================= */
-
-function addVideoClip(m){
-
-snapshot();
-
-let start=findVideoEnd();
-
-let c={
-id:uid(),
-type:"video",
-track:"video",
-mediaId:m.id,
-name:m.name,
-start,
-duration:Math.min(m.duration,30),
-sourceStart:0,
-transition:"none"
-};
-
-clips.push(c);
-
-duration=Math.max(
-duration,
-c.start+c.duration
-);
-
-selectClip(c);
-renderTimeline()
-}
-
-function addAudioClip(m){
-
-snapshot();
-
-let start=findVideoEnd();
-
-let c={
-id:uid(),
-type:"audio",
-track:"audio",
-mediaId:m.id,
-name:m.name,
-start,
-duration:m.duration,
-sourceStart:0,
-volume:1
-};
-
-clips.push(c);
-
-duration=Math.max(
-duration,
-c.start+c.duration
-);
-
-selectClip(c);
-renderTimeline()
-}
-
-function findVideoEnd(){
-
-let end=0;
-
-clips
-.filter(c=>c.track==="video")
-.forEach(c=>{
-end=Math.max(end,c.start+c.duration)
-});
-
-return end
-}
-
-
-/* =========================
-   TEXT
-========================= */
-
-function addText(){
-
-snapshot();
-
-let c={
-id:uid(),
-type:"text",
-track:"text",
-name:"Text",
-start:currentTime,
-duration:4,
-
-text:"Dein Text",
-
-size:60,
-
-x:640,
-y:360,
-
-color:"#ffffff",
-
-transition:"none"
-};
-
-clips.push(c);
-
-selectClip(c);
-renderTimeline();
-drawPreview()
-}
-
-
-/* =========================
-   EMOJI
-========================= */
-
-function addEmoji(){
-
-snapshot();
-
-let c={
-id:uid(),
-type:"emoji",
-track:"emoji",
-name:"Emoji",
-start:currentTime,
-duration:4,
-
-emoji:"😀",
-
-size:100,
-
-x:640,
-y:360,
-
-transition:"none"
-};
-
-clips.push(c);
-
-selectClip(c);
-renderTimeline();
-drawPreview()
-}
-
-
-/* =========================
-   ÜBERGANG
-========================= */
-
-function addTransition(){
-
-if(!selected)return;
-
-snapshot();
-
-selected.transition=
-selected.transition==="none"
-?"fade"
-:"none";
-
-updateInspector();
-drawPreview()
-}
-
-
-/* =========================
-   TIMELINE
-========================= */
-
-function renderTimeline(){
-
-document.querySelectorAll(".track")
-.forEach(t=>t.innerHTML="");
-
-clips.forEach(c=>{
-
-let track=document.querySelector(
-`.track[data-track="${c.track}"]`
-);
-
-if(!track)return;
-
-let el=document.createElement("div");
-
-el.className=
-"clip "+c.type+
-(selected===c?" selected":"");
-
-el.style.left=
-(c.start*pixelsPerSecond)+"px";
-
-el.style.width=
-Math.max(
-25,
-c.duration*pixelsPerSecond
-)+"px";
-
-el.innerHTML=
-`<div class="clipTitle">
-${c.type==="text"?"📝 ":""}
-${c.type==="emoji"?"😀 ":""}
-${c.name||c.text||""}
-</div>
-<div class="handle left"></div>
-<div class="handle right"></div>`;
-
-track.appendChild(el);
-
-el.onpointerdown=e=>{
-
-selectClip(c);
-
-let type="move";
-
-if(e.target.classList.contains("left"))
-type="left";
-
-if(e.target.classList.contains("right"))
-type="right";
-
-drag={
-type,
-clip:c,
-startX:e.clientX,
-oldStart:c.start,
-oldDuration:c.duration
-};
-
-el.setPointerCapture(e.pointerId)
-};
-
-el.onpointermove=e=>{
-
-if(!drag||drag.clip!==c)return;
-
-let dx=
-e.clientX-drag.startX;
-
-let dt=
-dx/pixelsPerSecond;
-
-if(drag.type==="move"){
-
-c.start=
-Math.max(
-0,
-drag.oldStart+dt
-)
-}
-
-if(drag.type==="right"){
-
-c.duration=
-Math.max(
-.1,
-drag.oldDuration+dt
-)
-}
-
-if(drag.type==="left"){
-
-let ns=
-Math.max(
-0,
-drag.oldStart+dt
-);
-
-let delta=
-ns-drag.oldStart;
-
-if(
-drag.oldDuration-delta>.1
-){
-
-c.start=ns;
-c.duration=
-drag.oldDuration-delta;
-
-if(c.sourceStart!==undefined)
-c.sourceStart+=delta
-}
-}
-
-duration=Math.max(
-1,
-...clips.map(x=>x.start+x.duration)
-);
-
-renderTimeline();
-updateInspector();
-drawPreview()
-};
-
-el.onpointerup=()=>{
-drag=null
-};
+    updateButton();
 
 });
 
-renderRuler();
-updatePlayhead()
+function addMessage(text,type){
+
+    if(empty){
+        empty.remove();
+    }
+
+    const message =
+        document.createElement("div");
+
+    message.className =
+        "message "+type;
+
+    const bubble =
+        document.createElement("div");
+
+    bubble.className="bubble";
+
+    bubble.textContent=text;
+
+    message.appendChild(bubble);
+
+    chatInner.appendChild(message);
+
+    document.querySelector(".chat").scrollTop =
+        document.querySelector(".chat").scrollHeight;
 }
 
+function sendMessage(){
 
-/* =========================
-   RULER
-========================= */
+    const text=input.value.trim();
 
-function renderRuler(){
+    if(!text)return;
 
-timelineCanvas.style.width=
-Math.max(
-1200,
-duration*pixelsPerSecond
-)+"px";
+    addMessage(text,"user");
 
-let top=document.querySelector(".timelineTop");
+    input.value="";
+    input.style.height="42px";
 
-let old=document.getElementById("ruler");
+    updateButton();
 
-if(old)old.remove();
+    /*
+        HIER WIRD SPÄTER DEINE EIGENE KI
+        ANGESCHLOSSEN.
 
-let ruler=document.createElement("div");
+        Beispiel:
 
-ruler.id="ruler";
+        const antwort =
+            await meineKI(text);
 
-ruler.style.position="absolute";
-ruler.style.left="145px";
-ruler.style.top="0";
-ruler.style.height="34px";
-
-let step=
-pixelsPerSecond>=100?1:
-pixelsPerSecond>=50?2:
-pixelsPerSecond>=25?5:10;
-
-for(let t=0;t<=duration+step;t+=step){
-
-let x=document.createElement("span");
-
-x.style.position="absolute";
-x.style.left=
-(t*pixelsPerSecond)+"px";
-
-x.style.height="34px";
-x.style.borderLeft="1px solid #444";
-x.style.paddingLeft="4px";
-x.style.fontSize="10px";
-x.style.color="#999";
-
-x.textContent=
-Math.floor(t/60)+":"+
-String(Math.floor(t%60)).padStart(2,"0");
-
-ruler.appendChild(x)
+        addMessage(antwort,"ai");
+    */
 }
 
-document.querySelector(".timelineTop")
-.appendChild(ruler)
-}
+send.addEventListener("click",sendMessage);
 
-function zoomTimeline(dir){
+input.addEventListener("keydown",function(e){
 
-pixelsPerSecond*=
-dir>0?1.25:.8;
+    if(
+        e.key==="Enter" &&
+        !e.shiftKey
+    ){
 
-pixelsPerSecond=
-clamp(pixelsPerSecond,20,300);
+        e.preventDefault();
 
-renderTimeline()
-}
+        sendMessage();
 
-function fitTimeline(){
+    }
 
-let w=timelineArea.clientWidth;
-
-pixelsPerSecond=
-clamp(
-(w-20)/Math.max(duration,1),
-20,
-300
-);
-
-renderTimeline()
-}
-
-
-/* =========================
-   PLAYHEAD
-========================= */
-
-timelineArea.onpointerdown=e=>{
-
-if(e.target.closest(".clip"))return;
-
-let rect=
-timelineCanvas.getBoundingClientRect();
-
-let x=
-e.clientX-
-rect.left+
-timelineArea.scrollLeft;
-
-currentTime=
-clamp(
-x/pixelsPerSecond,
-0,
-duration
-);
-
-seekMedia();
-drawPreview();
-updatePlayhead()
-}
-
-function updatePlayhead(){
-
-playhead.style.left=
-(currentTime*pixelsPerSecond)+"px";
-
-document.getElementById("time")
-.textContent=formatTime(currentTime)
-}
-
-function goStart(){
-
-currentTime=0;
-seekMedia();
-drawPreview();
-updatePlayhead()
-}
-
-function goEnd(){
-
-currentTime=duration;
-seekMedia();
-drawPreview();
-updatePlayhead()
-}
-
-function step(dir){
-
-currentTime=
-clamp(
-currentTime+dir/30,
-0,
-duration
-);
-
-seekMedia();
-drawPreview();
-updatePlayhead()
-}
-
-
-/* =========================
-   PLAYBACK
-========================= */
-
-function togglePlay(){
-
-playing=!playing;
-
-document.getElementById("playButton")
-.textContent=playing?"❚❚":"▶";
-
-if(playing){
-
-lastFrame=performance.now();
-
-requestAnimationFrame(loop)
-
-}else{
-
-cancelAnimationFrame(raf);
-
-videos.forEach(v=>v.pause());
-audios.forEach(a=>a.pause())
-}
-}
-
-function loop(now){
-
-if(!playing)return;
-
-let dt=
-(now-lastFrame)/1000;
-
-lastFrame=now;
-
-currentTime+=dt;
-
-if(currentTime>=duration){
-
-currentTime=duration;
-playing=false;
-
-document.getElementById("playButton")
-.textContent="▶"
-}
-
-seekMedia();
-drawPreview();
-updatePlayhead();
-
-if(playing)
-raf=requestAnimationFrame(loop)
-}
-
-
-/* =========================
-   MEDIA SYNC
-========================= */
-
-function seekMedia(){
-
-clips.forEach(c=>{
-
-let active=
-currentTime>=c.start&&
-currentTime<=c.start+c.duration;
-
-if(c.type==="video"){
-
-let v=videos.get(c.mediaId);
-
-if(!v)return;
-
-if(active){
-
-let target=
-(c.sourceStart||0)+
-(currentTime-c.start);
-
-try{
-
-if(Math.abs(v.currentTime-target)>.06)
-v.currentTime=target;
-
-if(playing)
-v.play().catch(()=>{});
-else
-v.pause()
-
-}catch{}
-}else{
-
-v.pause()
-}
-}
-
-if(c.type==="audio"){
-
-let a=audios.get(c.mediaId);
-
-if(!a)return;
-
-if(active){
-
-let target=
-(c.sourceStart||0)+
-(currentTime-c.start);
-
-try{
-
-if(Math.abs(a.currentTime-target)>.1)
-a.currentTime=target;
-
-a.volume=c.volume??1;
-
-if(playing)
-a.play().catch(()=>{});
-else
-a.pause()
-
-}catch{}
-}else{
-
-a.pause()
-}
-}
-})
-}
-
-
-/* =========================
-   PREVIEW
-========================= */
-
-function drawPreview(){
-
-ctx.clearRect(
-0,0,
-canvas.width,
-canvas.height
-);
-
-ctx.fillStyle="#000";
-
-ctx.fillRect(
-0,0,
-canvas.width,
-canvas.height
-);
-
-let active=
-clips.filter(c=>
-c.type==="video"&&
-currentTime>=c.start&&
-currentTime<=c.start+c.duration
-);
-
-if(active.length){
-
-let c=active[active.length-1];
-
-let v=videos.get(c.mediaId);
-
-if(v&&v.readyState>=2){
-
-let scale=Math.min(
-1280/v.videoWidth,
-720/v.videoHeight
-);
-
-let w=v.videoWidth*scale;
-let h=v.videoHeight*scale;
-
-ctx.drawImage(
-v,
-(1280-w)/2,
-(720-h)/2,
-w,h
-)
-}
-}
-
-renderObjects()
-}
-
-
-/* =========================
-   TEXT + EMOJI OVERLAY
-========================= */
-
-function renderObjects(){
-
-objectLayer.innerHTML="";
-
-clips
-.filter(c=>
-(c.type==="text"||c.type==="emoji")&&
-currentTime>=c.start&&
-currentTime<=c.start+c.duration
-)
-.forEach(c=>{
-
-let el=
-document.createElement("div");
-
-el.className=
-"objectBox"+
-(selected===c?" selected":"");
-
-let left=
-(c.x/1280)*100;
-
-let top=
-(c.y/720)*100;
-
-el.style.left=left+"%";
-el.style.top=top+"%";
-
-if(c.type==="text"){
-
-el.classList.add("objectText");
-
-el.textContent=
-c.text||"Text";
-
-el.style.fontSize=
-((c.size||60)/1280*100)+
-"vw";
-
-el.style.color=
-c.color||"#fff";
-
-el.style.textAlign="center";
-
-}
-
-if(c.type==="emoji"){
-
-el.classList.add("objectEmoji");
-
-el.textContent=
-c.emoji||"😀";
-
-el.style.fontSize=
-((c.size||100)/1280*100)+
-"vw";
-
-}
-
-el.onpointerdown=e=>{
-
-e.stopPropagation();
-
-selectClip(c);
-
-previewDrag={
-clip:c,
-startX:e.clientX,
-startY:e.clientY,
-oldX:c.x,
-oldY:c.y
-};
-
-el.setPointerCapture(e.pointerId)
-};
-
-el.onpointermove=e=>{
-
-if(!previewDrag||
-previewDrag.clip!==c)return;
-
-let rect=
-document.querySelector(".stage")
-.getBoundingClientRect();
-
-let dx=
-(e.clientX-previewDrag.startX)/
-rect.width*1280;
-
-let dy=
-(e.clientY-previewDrag.startY)/
-rect.height*720;
-
-c.x=
-clamp(
-previewDrag.oldX+dx,
-0,
-1280
-);
-
-c.y=
-clamp(
-previewDrag.oldY+dy,
-0,
-720
-);
-
-updateInspector();
-renderObjects()
-};
-
-el.onpointerup=()=>{
-previewDrag=null
-};
-
-objectLayer.appendChild(el)
-})
-}
-
-
-/* =========================
-   INSPECTOR
-========================= */
-
-function selectClip(c){
-
-selected=c;
-
-updateInspector();
-renderTimeline();
-drawPreview()
-}
-
-function updateInspector(){
-
-let ids=[
-"propName",
-"propStart",
-"propDuration",
-"propText",
-"propSize",
-"propColor",
-"propEmoji",
-"propEmojiSize",
-"propX",
-"propY",
-"propTransition"
-];
-
-ids.forEach(id=>{
-document.getElementById(id).disabled=!selected
 });
 
-if(!selected)return;
-
-document.getElementById("propName").value=
-selected.name||"";
-
-document.getElementById("propStart").value=
-(selected.start||0).toFixed(2);
-
-document.getElementById("propDuration").value=
-(selected.duration||1).toFixed(2);
-
-document.getElementById("propText").value=
-selected.text||"";
-
-document.getElementById("propSize").value=
-selected.type==="text"
-?(selected.size||60)
-:60;
-
-document.getElementById("propColor").value=
-selected.color||"#ffffff";
-
-document.getElementById("propEmoji").value=
-selected.emoji||"😀";
-
-document.getElementById("propEmojiSize").value=
-selected.type==="emoji"
-?(selected.size||100)
-:100;
-
-document.getElementById("propX").value=
-selected.x??640;
-
-document.getElementById("propY").value=
-selected.y??360;
-
-document.getElementById("propTransition").value=
-selected.transition||"none";
-
-document.getElementById("textFields")
-.style.display=
-selected.type==="text"
-?"block":"none";
-
-document.getElementById("emojiFields")
-.style.display=
-selected.type==="emoji"
-?"block":"none";
-}
-
-function updateSelected(){
-
-if(!selected)return;
-
-selected.name=
-document.getElementById("propName").value;
-
-selected.start=
-parseFloat(
-document.getElementById("propStart").value
-)||0;
-
-selected.duration=
-Math.max(
-.1,
-parseFloat(
-document.getElementById("propDuration").value
-)||.1
-);
-
-if(selected.type==="text"){
-
-selected.text=
-document.getElementById("propText").value;
-
-selected.size=
-parseFloat(
-document.getElementById("propSize").value
-)||60;
-
-selected.color=
-document.getElementById("propColor").value;
-}
-
-if(selected.type==="emoji"){
-
-selected.emoji=
-document.getElementById("propEmoji").value;
-
-selected.size=
-parseFloat(
-document.getElementById("propEmojiSize").value
-)||100;
-}
-
-selected.x=
-clamp(
-parseFloat(
-document.getElementById("propX").value
-)||0,
-0,1280
-);
-
-selected.y=
-clamp(
-parseFloat(
-document.getElementById("propY").value
-)||0,
-0,720
-);
-
-selected.transition=
-document.getElementById("propTransition").value;
-
-duration=Math.max(
-1,
-...clips.map(c=>c.start+c.duration)
-);
-
-renderTimeline();
-drawPreview()
-}
-
-
-/* =========================
-   DELETE
-========================= */
-
-function deleteSelected(){
-
-if(!selected)return;
-
-snapshot();
-
-clips=
-clips.filter(c=>c!==selected);
-
-selected=null;
-
-updateInspector();
-renderTimeline();
-drawPreview()
-}
-
-
-/* =========================
-   SPLIT
-========================= */
-
-function splitSelected(){
-
-if(!selected)return;
-
-if(
-currentTime<=selected.start||
-currentTime>=
-selected.start+selected.duration
-)return;
-
-snapshot();
-
-let first={...selected};
-
-let second={
-...selected,
-id:uid()
-};
-
-let cut=
-currentTime-selected.start;
-
-first.duration=cut;
-
-second.start=currentTime;
-second.duration=
-selected.duration-cut;
-
-if(second.sourceStart!==undefined)
-second.sourceStart=
-(selected.sourceStart||0)+cut;
-
-let i=clips.indexOf(selected);
-
-clips.splice(
-i,
-1,
-first,
-second
-);
-
-selected=second;
-
-renderTimeline();
-updateInspector();
-drawPreview()
-}
-
-
-/* =========================
-   UNDO REDO
-========================= */
-
-function undo(){
-
-if(!history.length)return;
-
-future.push(JSON.stringify(clips));
-
-clips=
-JSON.parse(history.pop());
-
-selected=null;
-
-duration=Math.max(
-1,
-...clips.map(c=>c.start+c.duration)
-);
-
-renderTimeline();
-updateInspector();
-drawPreview()
-}
-
-function redo(){
-
-if(!future.length)return;
-
-history.push(JSON.stringify(clips));
-
-clips=
-JSON.parse(future.pop());
-
-selected=null;
-
-duration=Math.max(
-1,
-...clips.map(c=>c.start+c.duration)
-);
-
-renderTimeline();
-updateInspector();
-drawPreview()
-}
-
-
-/* =========================
-   SAVE
-========================= */
-
-function saveProject(){
-
-let data={
-app:"GhostCut Studio",
-version:2,
-project:
-document.getElementById("projectName").value,
-duration,
-clips
-};
-
-let blob=
-new Blob(
-[JSON.stringify(data,null,2)],
-{type:"application/json"}
-);
-
-let a=document.createElement("a");
-
-a.href=
-URL.createObjectURL(blob);
-
-a.download=
-(data.project||"projekt")+
-".ghostcut.json";
-
-a.click()
-}
-
-function loadProject(){
-
-projectInput.click()
-}
-
-projectInput.onchange=e=>{
-
-let file=e.target.files[0];
-
-if(!file)return;
-
-let r=new FileReader();
-
-r.onload=()=>{
-
-try{
-
-let data=
-JSON.parse(r.result);
-
-clips=data.clips||[];
-
-duration=data.duration||30;
-
-document.getElementById("projectName")
-.value=data.project||"Mein Projekt";
-
-selected=null;
-
-renderTimeline();
-updateInspector();
-drawPreview();
-
-}catch{}
-};
-
-r.readAsText(file)
-}
-
-
-/* =========================
-   NEW
-========================= */
-
-function newProject(){
-
-if(!confirm("Neues Projekt erstellen?"))
-return;
-
-clips=[];
-media=[];
-selected=null;
-
-videos.clear();
-audios.clear();
-
-duration=30;
-currentTime=0;
-
-history=[];
-future=[];
-
-document.getElementById("projectName")
-.value="Mein Projekt";
-
-renderMedia();
-renderTimeline();
-updateInspector();
-drawPreview()
-}
-
-
-/* =========================
-   EXPORT
-========================= */
-
-async function exportVideo(){
-
-if(!MediaRecorder)return;
-
-let out=
-document.createElement("canvas");
-
-out.width=1280;
-out.height=720;
-
-let octx=
-out.getContext("2d");
-
-let stream=
-out.captureStream(30);
-
-let mime=
-"video/webm;codecs=vp9";
-
-if(!MediaRecorder.isTypeSupported(mime))
-mime="video/webm";
-
-let recorder=
-new MediaRecorder(
-stream,
-{
-mimeType:mime,
-videoBitsPerSecond:8000000
-}
-);
-
-let chunks=[];
-
-recorder.ondataavailable=e=>{
-if(e.data.size)
-chunks.push(e.data)
-};
-
-recorder.onstop=()=>{
-
-let blob=
-new Blob(
-chunks,
-{type:mime}
-);
-
-let a=document.createElement("a");
-
-a.href=
-URL.createObjectURL(blob);
-
-a.download=
-(document.getElementById("projectName")
-.value||"GhostCut")+
-".webm";
-
-a.click()
-};
-
-let oldTime=currentTime;
-
-recorder.start();
-
-let start=performance.now();
-
-function render(now){
-
-let t=
-(now-start)/1000;
-
-currentTime=
-Math.min(t,duration);
-
-seekMedia();
-
-octx.fillStyle="#000";
-octx.fillRect(0,0,1280,720);
-
-let active=
-clips.filter(c=>
-c.type==="video"&&
-currentTime>=c.start&&
-currentTime<=c.start+c.duration
-);
-
-if(active.length){
-
-let c=active[active.length-1];
-
-let v=videos.get(c.mediaId);
-
-if(v&&v.readyState>=2){
-
-let scale=Math.min(
-1280/v.videoWidth,
-720/v.videoHeight
-);
-
-let w=v.videoWidth*scale;
-let h=v.videoHeight*scale;
-
-octx.drawImage(
-v,
-(1280-w)/2,
-(720-h)/2,
-w,h
-)
-}
-}
-
-clips
-.filter(c=>
-(c.type==="text"||c.type==="emoji")&&
-currentTime>=c.start&&
-currentTime<=c.start+c.duration
-)
-.forEach(c=>{
-
-octx.save();
-
-if(c.type==="text"){
-
-octx.font=
-"700 "+(c.size||60)+"px Arial";
-
-octx.fillStyle=
-c.color||"#fff";
-
-octx.textAlign="center";
-octx.textBaseline="middle";
-
-let lines=
-String(c.text||"").split("\n");
-
-lines.forEach((line,i)=>{
-octx.fillText(
-line,
-c.x||640,
-(c.y||360)+
-i*(c.size||60)*1.15
-)
-})
-}
-
-if(c.type==="emoji"){
-
-octx.font=
-(c.size||100)+"px Arial";
-
-octx.textAlign="center";
-octx.textBaseline="middle";
-
-octx.fillText(
-c.emoji||"😀",
-c.x||640,
-c.y||360
-)
-}
-
-octx.restore()
-});
-
-if(t<duration){
-
-requestAnimationFrame(render)
-
-}else{
-
-setTimeout(()=>{
-
-recorder.stop();
-
-currentTime=oldTime;
-
-seekMedia();
-drawPreview();
-updatePlayhead()
-
-},100)
-}
-}
-
-requestAnimationFrame(render)
-}
-
-
-/* =========================
-   TASTATUR
-========================= */
-
-document.addEventListener("keydown",e=>{
-
-if(e.target.matches(
-"input,textarea,select"
-))return;
-
-if(e.code==="Space"){
-
-e.preventDefault();
-
-togglePlay()
-}
-
-if(e.key==="Delete")
-deleteSelected();
-
-if(e.ctrlKey&&e.key.toLowerCase()==="z"){
-e.preventDefault();
-undo()
-}
-
-if(e.ctrlKey&&e.key.toLowerCase()==="y"){
-e.preventDefault();
-redo()
-}
-
-if(e.key==="ArrowLeft")
-step(-1);
-
-if(e.key==="ArrowRight")
-step(1)
-});
-
-
-/* =========================
-   START
-========================= */
-
-renderTimeline();
-updateInspector();
-drawPreview();
+updateButton();
 
 </script>
 
