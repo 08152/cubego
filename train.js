@@ -1,1309 +1,2133 @@
-// train.js
-// ============================================================
-// EIGENES MINI-TRANSFORMER-SPRACHMODELL
-// Reines JavaScript – keine Bibliotheken
-// ============================================================
+/* ============================================================
+   train.js
+   ============================================================
+   TRAININGSSYSTEM FÜR DAS EIGENE SPRACHMODELL
+
+   Liest automatisch:
+       DATEN/*.json
+
+   Unterstützt z.B.:
+       DATEN/training.json
+       DATEN/wissen.json
+       DATEN/sprechen.json
+       DATEN/regeln.json
+       DATEN/persöhnlichkeit.json
+       DATEN/weitere_datei.json
+
+   Keine externen Bibliotheken.
+   ============================================================ */
 
 "use strict";
 
-// ============================================================
-// KONFIGURATION
-// ============================================================
 
-const CONFIG = {
-    vocabSize: 512,
-    contextSize: 64,
+/* ============================================================
+   KONFIGURATION
+   ============================================================ */
 
-    embeddingSize: 64,
+const TRAIN_CONFIG = {
 
-    heads: 4,
-    layers: 3,
+    dataFolder: "DATEN/",
 
-    feedForwardSize: 128,
+    /*
+     * Dateien, die automatisch versucht werden.
+     * Zusätzliche JSON-Dateien können über den
+     * Ordner-Auswahldialog geladen werden.
+     */
 
-    epochs: 300,
-    learningRate: 0.0005,
+    defaultFiles: [
+        "training.json",
+        "wissen.json",
+        "wissen_de.json",
+        "sprechen.json",
+        "regeln.json",
+        "persöhnlichkeit.json",
+        "persoenlichkeit.json",
+        "dialoge.json",
+        "fragen.json",
+        "antworten.json",
+        "daten.json",
+        "chat.json"
+    ],
 
-    temperature: 0.8,
+    epochs: 10,
 
-    saveKey: "LUMORA_TRANSFORMER_MODEL"
+    batchSize: 1,
+
+    learningRate: 0.0003,
+
+    sequenceLength: 256,
+
+    shuffle: true,
+
+    saveEveryEpoch: true,
+
+    modelStorageKey: "MEINE_KI_MODEL",
+
+    tokenizerStorageKey: "MEINE_KI_TOKENIZER",
+
+    logEvery: 1
 };
 
 
-// ============================================================
-// TRAININGSDATEN
-// ============================================================
+/* ============================================================
+   STATUS
+   ============================================================ */
 
-const TEXTS = [
+const TRAIN_STATUS = {
 
-    "Hallo! Wie geht es dir?",
-    "Hallo! Schön, dass du da bist.",
-    "Mir geht es gut.",
-    "Danke, mir geht es gut.",
-    "Ich bin eine eigene künstliche Intelligenz.",
-    "Ich bin ein kleines neuronales Sprachmodell.",
-    "Ich kann Texte analysieren und neue Texte erzeugen.",
-    "Künstliche Intelligenz kann Sprache verarbeiten.",
-    "Ein neuronales Netzwerk besteht aus vielen mathematischen Operationen.",
-    "Ein Transformer verwendet Aufmerksamkeit.",
-    "Self Attention ermöglicht es einem Modell, verschiedene Wörter miteinander zu vergleichen.",
-    "Das Modell lernt aus Beispielen.",
-    "Beim Training werden die Gewichte des Netzwerks verändert.",
-    "Ein Token ist eine Einheit, die das Modell verarbeitet.",
-    "Text wird zuerst in Zahlen umgewandelt.",
-    "Danach verarbeitet das neuronale Netzwerk diese Zahlen.",
-    "Am Ende berechnet das Modell Wahrscheinlichkeiten für mögliche nächste Tokens.",
-    "Die Antwort wird Schritt für Schritt erzeugt.",
-    "Je größer ein Modell ist, desto mehr Parameter kann es besitzen.",
-    "Ein kleines Modell kann auf einem normalen Computer trainiert werden.",
-    "JavaScript kann neuronale Netzwerke direkt ausführen.",
-    "Diese KI verwendet keine externe Bibliothek.",
-    "Das Modell soll später eigene Antworten erzeugen.",
-    "Die KI soll nicht nur fertige Antworten aus einer Liste auswählen.",
-    "Sie soll aus gelernten Wahrscheinlichkeiten neue Sequenzen erzeugen.",
+    running: false,
 
-    "Was ist eine KI?",
-    "Eine KI ist ein Computersystem, das Aufgaben mithilfe gelernter Muster bearbeiten kann.",
+    epoch: 0,
 
-    "Was ist ein neuronales Netzwerk?",
-    "Ein neuronales Netzwerk ist ein mathematisches Modell mit vielen verbundenen Parametern.",
+    totalEpochs: 0,
 
-    "Was ist ein Transformer?",
-    "Ein Transformer ist eine neuronale Netzwerkarchitektur, die besonders gut für Sequenzen und Sprache geeignet ist.",
+    currentFile: "",
 
-    "Was ist Attention?",
-    "Attention bestimmt, welche anderen Tokens für ein Token besonders wichtig sind.",
+    currentExample: 0,
 
-    "Wer bist du?",
-    "Ich bin eine kleine selbst entwickelte KI.",
+    totalExamples: 0,
 
-    "Was kannst du?",
-    "Ich kann Sprache analysieren und später eigene Antworten erzeugen.",
+    loss: 0,
 
-    "Danke.",
-    "Gerne!",
-    
-    "Tschüss.",
-    "Bis bald!"
-];
+    averageLoss: 0,
+
+    tokens: 0,
+
+    files: [],
+
+    examples: 0,
+
+    startedAt: 0,
+
+    elapsed: 0,
+
+    stopped: false
+};
 
 
-// ============================================================
-// TOKENIZER
-// ============================================================
+/* ============================================================
+   EVENT SYSTEM
+   ============================================================ */
 
-class Tokenizer {
+const TrainEvents = {
 
-    constructor(){
+    listeners: {},
 
-        this.special = [
-            "<PAD>",
-            "<UNK>",
-            "<BOS>",
-            "<EOS>"
-        ];
+    on(name, callback) {
 
-        this.vocabulary = [
-            ...this.special
-        ];
+        if (!this.listeners[name]) {
+            this.listeners[name] = [];
+        }
 
-        this.tokenToId = new Map();
-        this.idToToken = new Map();
+        this.listeners[name].push(callback);
+    },
 
-    }
+    emit(name, data) {
 
+        const list =
+            this.listeners[name] || [];
 
-    normalize(text){
+        for (const callback of list) {
 
-        return text
-            .normalize("NFKC")
-            .toLowerCase()
-            .replace(/\r/g, "")
-            .replace(/\n+/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-
-    }
-
-
-    split(text){
-
-        return this
-            .normalize(text)
-            .split(/(\s+|[,.!?;:()[\]{}"'„“])/)
-            .filter(x => x && !/^\s+$/.test(x));
-
-    }
-
-
-    build(texts){
-
-        const counts = new Map();
-
-        for(const text of texts){
-
-            const tokens = this.split(text);
-
-            for(const token of tokens){
-
-                counts.set(
-                    token,
-                    (counts.get(token) || 0) + 1
+            try {
+                callback(data);
+            } catch (error) {
+                console.error(
+                    "TrainEvents:",
+                    error
                 );
-
             }
-
         }
-
-        const sorted = [...counts.entries()]
-            .sort((a,b) => b[1] - a[1]);
-
-        for(const [token] of sorted){
-
-            if(
-                !this.vocabulary.includes(token) &&
-                this.vocabulary.length < CONFIG.vocabSize
-            ){
-
-                this.vocabulary.push(token);
-
-            }
-
-        }
-
-        this.rebuildMaps();
-
     }
+};
 
 
-    rebuildMaps(){
+/* ============================================================
+   LOG
+   ============================================================ */
 
-        this.tokenToId.clear();
-        this.idToToken.clear();
+function trainLog(...args) {
 
-        this.vocabulary.forEach((token,id)=>{
-
-            this.tokenToId.set(token,id);
-            this.idToToken.set(id,token);
-
-        });
-
-    }
-
-
-    encode(text){
-
-        const tokens = this.split(text);
-
-        const ids = [
-            this.tokenToId.get("<BOS>")
-        ];
-
-        for(const token of tokens){
-
-            ids.push(
-                this.tokenToId.has(token)
-                    ? this.tokenToId.get(token)
-                    : this.tokenToId.get("<UNK>")
-            );
-
-        }
-
-        ids.push(
-            this.tokenToId.get("<EOS>")
-        );
-
-        return ids;
-
-    }
-
-
-    decode(ids){
-
-        return ids
-            .map(id => this.idToToken.get(id) || "")
-            .filter(token =>
-                !["<BOS>","<EOS>","<PAD>"].includes(token)
-            )
-            .join(" ")
-            .replace(/\s+([,.!?;:])/g,"$1");
-
-    }
-
-}
-
-
-// ============================================================
-// MATHEMATISCHE HILFSFUNKTIONEN
-// ============================================================
-
-function randomNormal(){
-
-    let u = 0;
-    let v = 0;
-
-    while(u === 0) u = Math.random();
-    while(v === 0) v = Math.random();
-
-    return Math.sqrt(-2*Math.log(u))
-        * Math.cos(2*Math.PI*v);
-
-}
-
-
-function zeros(size){
-
-    return new Float64Array(size);
-
-}
-
-
-function matrix(rows,cols){
-
-    const m = [];
-
-    for(let i=0;i<rows;i++){
-
-        m.push(
-            new Float64Array(cols)
-        );
-
-    }
-
-    return m;
-
-}
-
-
-function randomMatrix(rows,cols,scale){
-
-    const m = matrix(rows,cols);
-
-    for(let i=0;i<rows;i++){
-
-        for(let j=0;j<cols;j++){
-
-            m[i][j] =
-                randomNormal() * scale;
-
-        }
-
-    }
-
-    return m;
-
-}
-
-
-function softmax(values){
-
-    let max = -Infinity;
-
-    for(const value of values){
-
-        if(value > max){
-            max=value;
-        }
-
-    }
-
-    const result =
-        new Float64Array(values.length);
-
-    let sum=0;
-
-    for(let i=0;i<values.length;i++){
-
-        result[i] =
-            Math.exp(values[i]-max);
-
-        sum += result[i];
-
-    }
-
-    for(let i=0;i<result.length;i++){
-
-        result[i] /= sum;
-
-    }
-
-    return result;
-
-}
-
-
-function dot(a,b){
-
-    let result=0;
-
-    for(let i=0;i<a.length;i++){
-
-        result += a[i]*b[i];
-
-    }
-
-    return result;
-
-}
-
-
-function relu(x){
-
-    return x > 0 ? x : 0;
-
-}
-
-
-function gelu(x){
-
-    return 0.5*x*
-        (
-            1+
-            Math.tanh(
-                Math.sqrt(2/Math.PI)*
-                (
-                    x+
-                    0.044715*
-                    Math.pow(x,3)
-                )
-            )
-        );
-
-}
-
-
-// ============================================================
-// LAYER NORMALIZATION
-// ============================================================
-
-class LayerNorm {
-
-    constructor(size){
-
-        this.size=size;
-
-        this.gamma =
-            new Float64Array(size);
-
-        this.beta =
-            new Float64Array(size);
-
-        for(let i=0;i<size;i++){
-
-            this.gamma[i]=1;
-            this.beta[i]=0;
-
-        }
-
-    }
-
-
-    forward(x){
-
-        let mean=0;
-
-        for(const value of x){
-            mean+=value;
-        }
-
-        mean/=x.length;
-
-        let variance=0;
-
-        for(const value of x){
-
-            variance +=
-                (value-mean)*
-                (value-mean);
-
-        }
-
-        variance/=x.length;
-
-        const inv =
-            1/Math.sqrt(
-                variance+1e-5
-            );
-
-        const result =
-            new Float64Array(x.length);
-
-        for(let i=0;i<x.length;i++){
-
-            result[i] =
-                (
-                    (x[i]-mean)*inv
-                )*
-                this.gamma[i]
-                +
-                this.beta[i];
-
-        }
-
-        return result;
-
-    }
-
-}
-
-
-// ============================================================
-// TRANSFORMER BLOCK
-// ============================================================
-
-class TransformerBlock {
-
-    constructor(){
-
-        const d=CONFIG.embeddingSize;
-        const ff=CONFIG.feedForwardSize;
-
-        this.q =
-            randomMatrix(
-                d,
-                d,
-                1/Math.sqrt(d)
-            );
-
-        this.k =
-            randomMatrix(
-                d,
-                d,
-                1/Math.sqrt(d)
-            );
-
-        this.v =
-            randomMatrix(
-                d,
-                d,
-                1/Math.sqrt(d)
-            );
-
-        this.o =
-            randomMatrix(
-                d,
-                d,
-                1/Math.sqrt(d)
-            );
-
-        this.ff1 =
-            randomMatrix(
-                ff,
-                d,
-                1/Math.sqrt(d)
-            );
-
-        this.ff2 =
-            randomMatrix(
-                d,
-                ff,
-                1/Math.sqrt(ff)
-            );
-
-        this.norm1 =
-            new LayerNorm(d);
-
-        this.norm2 =
-            new LayerNorm(d);
-
-    }
-
-
-    project(vector,weights){
-
-        const output =
-            new Float64Array(
-                weights.length
-            );
-
-        for(let i=0;i<weights.length;i++){
-
-            output[i]=
-                dot(
-                    weights[i],
-                    vector
-                );
-
-        }
-
-        return output;
-
-    }
-
-
-    attention(sequence){
-
-        const length=sequence.length;
-        const d=CONFIG.embeddingSize;
-
-        const Q=[];
-        const K=[];
-        const V=[];
-
-        for(let i=0;i<length;i++){
-
-            Q.push(
-                this.project(
-                    sequence[i],
-                    this.q
-                )
-            );
-
-            K.push(
-                this.project(
-                    sequence[i],
-                    this.k
-                )
-            );
-
-            V.push(
-                this.project(
-                    sequence[i],
-                    this.v
-                )
-            );
-
-        }
-
-        const result=[];
-
-        for(let i=0;i<length;i++){
-
-            const scores =
-                new Float64Array(i+1);
-
-            for(let j=0;j<=i;j++){
-
-                scores[j]=
-                    dot(Q[i],K[j])/
-                    Math.sqrt(d);
-
-            }
-
-            const weights =
-                softmax(scores);
-
-            const combined =
-                new Float64Array(d);
-
-            for(let j=0;j<=i;j++){
-
-                for(let x=0;x<d;x++){
-
-                    combined[x] +=
-                        weights[j]*
-                        V[j][x];
-
-                }
-
-            }
-
-            result.push(
-                this.project(
-                    combined,
-                    this.o
-                )
-            );
-
-        }
-
-        return result;
-
-    }
-
-
-    forward(sequence){
-
-        /*
-        Attention
-        */
-
-        const attention =
-            this.attention(sequence);
-
-        const afterAttention=[];
-
-        for(let i=0;i<sequence.length;i++){
-
-            const combined =
-                new Float64Array(
-                    CONFIG.embeddingSize
-                );
-
-            for(
-                let j=0;
-                j<CONFIG.embeddingSize;
-                j++
-            ){
-
-                combined[j]=
-                    sequence[i][j]+
-                    attention[i][j];
-
-            }
-
-            afterAttention.push(
-                this.norm1.forward(combined)
-            );
-
-        }
-
-
-        /*
-        Feed Forward
-        */
-
-        const result=[];
-
-        for(const vector of afterAttention){
-
-            const hidden =
-                new Float64Array(
-                    CONFIG.feedForwardSize
-                );
-
-            for(
-                let i=0;
-                i<CONFIG.feedForwardSize;
-                i++
-            ){
-
-                hidden[i]=gelu(
-                    dot(
-                        this.ff1[i],
-                        vector
-                    )
-                );
-
-            }
-
-            const output =
-                new Float64Array(
-                    CONFIG.embeddingSize
-                );
-
-            for(
-                let i=0;
-                i<CONFIG.embeddingSize;
-                i++
-            ){
-
-                output[i]=
-                    dot(
-                        this.ff2[i],
-                        hidden
-                    );
-
-            }
-
-            const residual =
-                new Float64Array(
-                    CONFIG.embeddingSize
-                );
-
-            for(
-                let i=0;
-                i<CONFIG.embeddingSize;
-                i++
-            ){
-
-                residual[i]=
-                    afterAttention[
-                        afterAttention.length-1
-                    ][i]
-                    +
-                    output[i];
-
-            }
-
-            result.push(
-                this.norm2.forward(residual)
-            );
-
-        }
-
-        return result;
-
-    }
-
-}
-
-
-// ============================================================
-// TRANSFORMER-MODELL
-// ============================================================
-
-class TransformerModel {
-
-    constructor(vocabSize){
-
-        this.vocabSize=vocabSize;
-
-        const d=CONFIG.embeddingSize;
-
-        this.tokenEmbedding =
-            randomMatrix(
-                vocabSize,
-                d,
-                0.02
-            );
-
-        this.positionEmbedding =
-            randomMatrix(
-                CONFIG.contextSize,
-                d,
-                0.02
-            );
-
-        this.blocks=[];
-
-        for(
-            let i=0;
-            i<CONFIG.layers;
-            i++
-        ){
-
-            this.blocks.push(
-                new TransformerBlock()
-            );
-
-        }
-
-        this.output =
-            randomMatrix(
-                vocabSize,
-                d,
-                1/Math.sqrt(d)
-            );
-
-    }
-
-
-    embed(tokens){
-
-        const result=[];
-
-        for(let position=0;position<tokens.length;position++){
-
-            const vector =
-                new Float64Array(
-                    CONFIG.embeddingSize
-                );
-
-            const token =
-                this.tokenEmbedding[
-                    tokens[position]
-                ];
-
-            const positional =
-                this.positionEmbedding[
-                    position
-                ];
-
-            for(
-                let i=0;
-                i<CONFIG.embeddingSize;
-                i++
-            ){
-
-                vector[i]=
-                    token[i]+
-                    positional[i];
-
-            }
-
-            result.push(vector);
-
-        }
-
-        return result;
-
-    }
-
-
-    forward(tokens){
-
-        let sequence =
-            this.embed(tokens);
-
-        for(const block of this.blocks){
-
-            sequence =
-                block.forward(sequence);
-
-        }
-
-        /*
-        Nur letztes Token:
-        Vorhersage des nächsten Tokens
-        */
-
-        const last =
-            sequence[
-                sequence.length-1
-            ];
-
-        const logits =
-            new Float64Array(
-                this.vocabSize
-            );
-
-        for(
-            let i=0;
-            i<this.vocabSize;
-            i++
-        ){
-
-            logits[i]=
-                dot(
-                    this.output[i],
-                    last
-                );
-
-        }
-
-        return softmax(logits);
-
-    }
-
-}
-
-
-// ============================================================
-// TRAINING
-// ============================================================
-
-const tokenizer =
-    new Tokenizer();
-
-tokenizer.build(TEXTS);
-
-console.log(
-    "Vocabulary:",
-    tokenizer.vocabulary.length
-);
-
-
-const sequences =
-    TEXTS.map(text =>
-        tokenizer.encode(text)
+    console.log(
+        "[TRAIN]",
+        ...args
     );
 
-
-const model =
-    new TransformerModel(
-        tokenizer.vocabulary.length
+    TrainEvents.emit(
+        "log",
+        args.join(" ")
     );
+}
 
 
-console.log(
-    "Transformer erstellt."
-);
+/* ============================================================
+   JSON HERUNTERLADEN
+   ============================================================ */
 
-console.log(
-    "Layer:",
-    CONFIG.layers
-);
+async function loadJSONFile(
+    filename
+) {
 
-console.log(
-    "Attention Heads:",
-    CONFIG.heads
-);
-
-console.log(
-    "Embedding:",
-    CONFIG.embeddingSize
-);
+    const path =
+        TRAIN_CONFIG.dataFolder +
+        filename;
 
 
-// ============================================================
-// TRAININGSDATEN ALS TOKEN-FOLGEN
-// ============================================================
+    try {
 
-function createTrainingPairs(){
-
-    const pairs=[];
-
-    for(const sequence of sequences){
-
-        for(
-            let i=1;
-            i<sequence.length;
-            i++
-        ){
-
-            const start =
-                Math.max(
-                    0,
-                    i-CONFIG.contextSize
-                );
-
-            const input =
-                sequence.slice(
-                    start,
-                    i
-                );
-
-            const target =
-                sequence[i];
-
-            pairs.push({
-                input,
-                target
+        const response =
+            await fetch(path, {
+                cache: "no-store"
             });
 
+
+        if (!response.ok) {
+
+            return null;
         }
 
+
+        const text =
+            await response.text();
+
+
+        if (!text.trim()) {
+
+            return null;
+        }
+
+
+        return JSON.parse(
+            text
+        );
+
+    } catch (error) {
+
+        console.warn(
+            "JSON konnte nicht geladen werden:",
+            path,
+            error
+        );
+
+        return null;
     }
-
-    return pairs;
-
 }
 
 
-const trainingPairs =
-    createTrainingPairs();
+/* ============================================================
+   ALLE STANDARD-DATEIEN LADEN
+   ============================================================ */
 
+async function loadDefaultDataFiles() {
 
-console.log(
-    "Training-Paare:",
-    trainingPairs.length
-);
+    const result = [];
 
+    for (
+        const filename of
+        TRAIN_CONFIG.defaultFiles
+    ) {
 
-// ============================================================
-// LOSS
-// ============================================================
-
-function crossEntropy(probabilities,target){
-
-    return -Math.log(
-        Math.max(
-            probabilities[target],
-            1e-12
-        )
-    );
-
-}
-
-
-// ============================================================
-// TRAININGSSCHLEIFE
-// ============================================================
-
-async function train(){
-
-    console.log("");
-    console.log(
-        "=============================="
-    );
-    console.log(
-        " TRANSFORMER TRAINING"
-    );
-    console.log(
-        "=============================="
-    );
-
-    for(
-        let epoch=0;
-        epoch<CONFIG.epochs;
-        epoch++
-    ){
-
-        let loss=0;
-
-        /*
-        Daten mischen
-        */
-
-        const shuffled =
-            [...trainingPairs].sort(
-                ()=>Math.random()-0.5
+        const data =
+            await loadJSONFile(
+                filename
             );
 
 
-        for(const pair of shuffled){
+        if (
+            data === null
+        ) {
+            continue;
+        }
 
-            const probabilities =
-                model.forward(
-                    pair.input
+
+        result.push({
+
+            name: filename,
+
+            data
+        });
+
+
+        trainLog(
+            "Geladen:",
+            filename
+        );
+    }
+
+
+    return result;
+}
+
+
+/* ============================================================
+   ORDNER AUS DATEIAUSWAHL LADEN
+   ============================================================ */
+
+async function loadDataFolderFromPicker() {
+
+    return new Promise(
+        (resolve) => {
+
+            const input =
+                document.createElement(
+                    "input"
                 );
 
-            loss +=
-                crossEntropy(
-                    probabilities,
-                    pair.target
-                );
+
+            input.type = "file";
+
+            input.multiple = true;
+
+            input.accept = ".json";
+
 
             /*
-            ==================================================
-            HINWEIS:
+             * Chrome unterstützt:
+             * webkitdirectory
+             */
 
-            Hier wird als nächster Schritt die vollständige
-            Backpropagation für Attention, Embeddings,
-            LayerNorm und Feed Forward ergänzt.
+            input.webkitdirectory =
+                true;
 
-            Das Modell besitzt bereits die komplette
-            Transformer-Forward-Architektur.
-            ==================================================
-            */
 
+            input.onchange =
+                async function () {
+
+                    const files =
+                        Array.from(
+                            input.files || []
+                        );
+
+
+                    const jsonFiles =
+                        files.filter(
+                            file =>
+                                file.name
+                                    .toLowerCase()
+                                    .endsWith(".json")
+                        );
+
+
+                    const result = [];
+
+
+                    for (
+                        const file of
+                        jsonFiles
+                    ) {
+
+                        try {
+
+                            const text =
+                                await file.text();
+
+
+                            const data =
+                                JSON.parse(
+                                    text
+                                );
+
+
+                            result.push({
+
+                                name:
+                                    file.webkitRelativePath ||
+                                    file.name,
+
+                                data
+                            });
+
+
+                        } catch (error) {
+
+                            console.warn(
+                                "Fehler in:",
+                                file.name,
+                                error
+                            );
+                        }
+                    }
+
+
+                    resolve(
+                        result
+                    );
+                };
+
+
+            input.click();
         }
+    );
+}
 
 
-        if(epoch%10===0){
+/* ============================================================
+   REKURSIV TEXT AUS BELIEBIGEM JSON HOLEN
+   ============================================================ */
 
-            console.log(
-                "Epoch",
-                epoch,
-                "| Loss:",
-                (
-                    loss /
-                    trainingPairs.length
-                ).toFixed(5)
-            );
+function extractTextFromJSON(
+    value,
+    output,
+    path
+) {
 
-            /*
-            Browser Luft geben
-            */
-
-            await new Promise(
-                resolve =>
-                    setTimeout(resolve,0)
-            );
-
-        }
-
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return;
     }
 
-    saveModel();
-
-    console.log(
-        "Training abgeschlossen."
-    );
-
-}
-
-
-// ============================================================
-// MODELL SPEICHERN
-// ============================================================
-
-function serializeMatrix(m){
-
-    return m.map(row =>
-        Array.from(row)
-    );
-
-}
-
-
-function saveModel(){
-
-    const data={
-
-        config:CONFIG,
-
-        vocabulary:
-            tokenizer.vocabulary,
-
-        tokenEmbedding:
-            serializeMatrix(
-                model.tokenEmbedding
-            ),
-
-        positionEmbedding:
-            serializeMatrix(
-                model.positionEmbedding
-            ),
-
-        output:
-            serializeMatrix(
-                model.output
-            ),
-
-        blocks:
-            model.blocks.map(block=>({
-
-                q:serializeMatrix(block.q),
-                k:serializeMatrix(block.k),
-                v:serializeMatrix(block.v),
-                o:serializeMatrix(block.o),
-
-                ff1:serializeMatrix(block.ff1),
-                ff2:serializeMatrix(block.ff2),
-
-                gamma1:
-                    Array.from(
-                        block.norm1.gamma
-                    ),
-
-                beta1:
-                    Array.from(
-                        block.norm1.beta
-                    ),
-
-                gamma2:
-                    Array.from(
-                        block.norm2.gamma
-                    ),
-
-                beta2:
-                    Array.from(
-                        block.norm2.beta
-                    )
-
-            }))
-
-    };
-
-
-    localStorage.setItem(
-        CONFIG.saveKey,
-        JSON.stringify(data)
-    );
-
-    console.log(
-        "Modell gespeichert:",
-        CONFIG.saveKey
-    );
-
-}
-
-
-// ============================================================
-// TEST-GENERIERUNG
-// ============================================================
-
-function randomChoice(probabilities){
-
-    let r=Math.random();
-
-    for(
-        let i=0;
-        i<probabilities.length;
-        i++
-    ){
-
-        r -= probabilities[i];
-
-        if(r<=0){
-            return i;
-        }
-
-    }
-
-    return probabilities.length-1;
-
-}
-
-
-function generate(prompt,maxTokens=30){
-
-    let tokens =
-        tokenizer.encode(prompt);
 
     /*
-    EOS entfernen
-    */
+     * String
+     */
 
-    if(
-        tokens[tokens.length-1] ===
-        tokenizer.tokenToId.get("<EOS>")
-    ){
+    if (
+        typeof value ===
+        "string"
+    ) {
 
-        tokens.pop();
+        const text =
+            value.trim();
 
+
+        if (
+            text.length > 0
+        ) {
+
+            output.push({
+
+                text,
+
+                path:
+                    path || ""
+            });
+        }
+
+
+        return;
     }
 
 
-    for(
-        let i=0;
-        i<maxTokens;
-        i++
-    ){
+    /*
+     * Zahl
+     */
 
-        const context =
-            tokens.slice(
-                -CONFIG.contextSize
+    if (
+        typeof value ===
+        "number"
+    ) {
+
+        output.push({
+
+            text:
+                String(value),
+
+            path:
+                path || ""
+        });
+
+
+        return;
+    }
+
+
+    /*
+     * Boolean
+     */
+
+    if (
+        typeof value ===
+        "boolean"
+    ) {
+
+        output.push({
+
+            text:
+                value
+                    ? "wahr"
+                    : "falsch",
+
+            path:
+                path || ""
+        });
+
+
+        return;
+    }
+
+
+    /*
+     * Array
+     */
+
+    if (
+        Array.isArray(value)
+    ) {
+
+        for (
+            let i = 0;
+            i < value.length;
+            i++
+        ) {
+
+            extractTextFromJSON(
+                value[i],
+                output,
+                `${path}[${i}]`
             );
-
-        const probabilities =
-            model.forward(context);
+        }
 
 
-        /*
-        Temperature
-        */
+        return;
+    }
 
-        const adjusted =
-            new Float64Array(
-                probabilities.length
-            );
 
-        let sum=0;
+    /*
+     * Objekt
+     */
 
-        for(
-            let j=0;
-            j<probabilities.length;
-            j++
-        ){
+    if (
+        typeof value ===
+        "object"
+    ) {
 
-            adjusted[j]=
-                Math.pow(
-                    probabilities[j],
-                    1/CONFIG.temperature
+        for (
+            const key of
+            Object.keys(value)
+        ) {
+
+            const child =
+                value[key];
+
+
+            /*
+             * Bei typischen Chatdaten
+             * versuchen wir die Struktur
+             * sinnvoll zu erhalten.
+             */
+
+            if (
+                typeof child ===
+                "string"
+            ) {
+
+                output.push({
+
+                    text:
+                        `${key}: ${child}`,
+
+                    path:
+                        path
+                            ? `${path}.${key}`
+                            : key
+                });
+
+            } else {
+
+                extractTextFromJSON(
+                    child,
+                    output,
+                    path
+                        ? `${path}.${key}`
+                        : key
                 );
-
-            sum += adjusted[j];
-
+            }
         }
-
-        for(
-            let j=0;
-            j<adjusted.length;
-            j++
-        ){
-
-            adjusted[j]/=sum;
-
-        }
-
-
-        const next =
-            randomChoice(adjusted);
-
-        tokens.push(next);
-
-
-        if(
-            next ===
-            tokenizer.tokenToId.get("<EOS>")
-        ){
-
-            break;
-
-        }
-
     }
-
-    return tokenizer.decode(tokens);
-
 }
 
 
-// ============================================================
-// START
-// ============================================================
+/* ============================================================
+   JSON → TEXTDATEN
+   ============================================================ */
 
-train().then(()=>{
+function convertFilesToText(
+    files
+) {
 
-    console.log(
-        "Testgeneration:"
+    const examples = [];
+
+
+    for (
+        const file of
+        files
+    ) {
+
+        const extracted = [];
+
+
+        extractTextFromJSON(
+            file.data,
+            extracted,
+            ""
+        );
+
+
+        /*
+         * Datei-Kontext hinzufügen
+         */
+
+        for (
+            const item of
+            extracted
+        ) {
+
+            const text =
+                `[DATEI: ${file.name}]\n` +
+                item.text;
+
+
+            examples.push({
+
+                text,
+
+                file:
+                    file.name,
+
+                path:
+                    item.path
+            });
+        }
+    }
+
+
+    return examples;
+}
+
+
+/* ============================================================
+   SPEZIELLE TRAININGSPAARE ERKENNEN
+   ============================================================ */
+
+function createConversationText(
+    value
+) {
+
+    if (
+        !value ||
+        typeof value !== "object"
+    ) {
+
+        return null;
+    }
+
+
+    /*
+     * Häufige Form:
+     *
+     * {
+     *   "frage": "...",
+     *   "antwort": "..."
+     * }
+     */
+
+    const question =
+        value.frage ??
+        value.question ??
+        value.user ??
+        value.input;
+
+
+    const answer =
+        value.antwort ??
+        value.answer ??
+        value.assistant ??
+        value.output;
+
+
+    if (
+        typeof question === "string" &&
+        typeof answer === "string"
+    ) {
+
+        return (
+            "<|user|>\n" +
+            question.trim() +
+            "\n<|end|>\n" +
+
+            "<|assistant|>\n" +
+            answer.trim() +
+            "\n<|end|>"
+        );
+    }
+
+
+    return null;
+}
+
+
+/* ============================================================
+   KONVERSATIONSSTRUKTUREN ERKENNEN
+   ============================================================ */
+
+function extractConversationPairs(
+    value,
+    output
+) {
+
+    if (
+        !value ||
+        typeof value !== "object"
+    ) {
+        return;
+    }
+
+
+    if (
+        Array.isArray(value)
+    ) {
+
+        for (
+            const item of
+            value
+        ) {
+
+            const conversation =
+                createConversationText(
+                    item
+                );
+
+
+            if (
+                conversation
+            ) {
+
+                output.push(
+                    conversation
+                );
+            }
+
+
+            extractConversationPairs(
+                item,
+                output
+            );
+        }
+
+
+        return;
+    }
+
+
+    const conversation =
+        createConversationText(
+            value
+        );
+
+
+    if (
+        conversation
+    ) {
+
+        output.push(
+            conversation
+        );
+    }
+
+
+    for (
+        const key of
+        Object.keys(value)
+    ) {
+
+        extractConversationPairs(
+            value[key],
+            output
+        );
+    }
+}
+
+
+/* ============================================================
+   TEXT NORMALISIEREN
+   ============================================================ */
+
+function normalizeTrainingText(
+    text
+) {
+
+    return String(text || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{4,}/g, "\n\n")
+        .trim();
+}
+
+
+/* ============================================================
+   TRAININGSDATEN ERSTELLEN
+   ============================================================ */
+
+function buildTrainingDataset(
+    files
+) {
+
+    const examples = [];
+
+    const conversations = [];
+
+
+    /*
+     * Zuerst echte Frage/Antwort-Paare
+     */
+
+    for (
+        const file of
+        files
+    ) {
+
+        extractConversationPairs(
+            file.data,
+            conversations
+        );
+    }
+
+
+    for (
+        const conversation of
+        conversations
+    ) {
+
+        const text =
+            normalizeTrainingText(
+                conversation
+            );
+
+
+        if (
+            text.length > 0
+        ) {
+
+            examples.push({
+
+                text,
+
+                type:
+                    "conversation",
+
+                file:
+                    "conversation"
+            });
+        }
+    }
+
+
+    /*
+     * Danach alle übrigen Textdaten
+     */
+
+    const generic =
+        convertFilesToText(
+            files
+        );
+
+
+    for (
+        const item of
+        generic
+    ) {
+
+        const text =
+            normalizeTrainingText(
+                item.text
+            );
+
+
+        if (
+            text.length > 0
+        ) {
+
+            examples.push({
+
+                text,
+
+                type:
+                    "knowledge",
+
+                file:
+                    item.file,
+
+                path:
+                    item.path
+            });
+        }
+    }
+
+
+    /*
+     * Duplikate entfernen
+     */
+
+    const unique =
+        new Map();
+
+
+    for (
+        const item of
+        examples
+    ) {
+
+        const key =
+            item.text;
+
+
+        if (
+            !unique.has(key)
+        ) {
+
+            unique.set(
+                key,
+                item
+            );
+        }
+    }
+
+
+    return Array.from(
+        unique.values()
+    );
+}
+
+
+/* ============================================================
+   TRAININGSTEXTE IN SEQUENZEN AUFTEILEN
+   ============================================================ */
+
+function createSequences(
+    tokenizer,
+    examples,
+    sequenceLength
+) {
+
+    const sequences = [];
+
+
+    for (
+        const example of
+        examples
+    ) {
+
+        let tokens;
+
+
+        try {
+
+            tokens =
+                tokenizer.encode(
+                    example.text
+                );
+
+        } catch (error) {
+
+            console.warn(
+                "Tokenisierung fehlgeschlagen:",
+                example.text,
+                error
+            );
+
+            continue;
+        }
+
+
+        if (
+            !tokens ||
+            tokens.length < 2
+        ) {
+            continue;
+        }
+
+
+        /*
+         * Lange Texte in mehrere
+         * Trainingsabschnitte zerlegen.
+         */
+
+        for (
+            let start = 0;
+            start < tokens.length - 1;
+            start += sequenceLength - 1
+        ) {
+
+            const part =
+                tokens.slice(
+                    start,
+                    start + sequenceLength
+                );
+
+
+            if (
+                part.length >= 2
+            ) {
+
+                sequences.push(
+                    part
+                );
+            }
+        }
+    }
+
+
+    return sequences;
+}
+
+
+/* ============================================================
+   SHUFFLE
+   ============================================================ */
+
+function shuffleArray(
+    array
+) {
+
+    for (
+        let i = array.length - 1;
+        i > 0;
+        i--
+    ) {
+
+        const j =
+            Math.floor(
+                Math.random() *
+                (i + 1)
+            );
+
+
+        [
+            array[i],
+            array[j]
+        ] =
+        [
+            array[j],
+            array[i]
+        ];
+    }
+
+
+    return array;
+}
+
+
+/* ============================================================
+   TOKENIZER PRÜFEN
+   ============================================================ */
+
+function getTokenizer() {
+
+    if (
+        typeof window !==
+        "undefined" &&
+        window.AdvancedTokenizer
+    ) {
+
+        return window.AdvancedTokenizer;
+    }
+
+
+    if (
+        typeof AdvancedTokenizer !==
+        "undefined"
+    ) {
+
+        return AdvancedTokenizer;
+    }
+
+
+    throw new Error(
+        "AdvancedTokenizer wurde nicht gefunden. " +
+        "tokenizer.js muss vor train.js geladen werden."
+    );
+}
+
+
+/* ============================================================
+   TOKENIZER INSTANZ ERSTELLEN
+   ============================================================ */
+
+async function createTokenizer() {
+
+    const Tokenizer =
+        getTokenizer();
+
+
+    /*
+     * Unterstützt:
+     *
+     * AdvancedTokenizer.create()
+     * new AdvancedTokenizer()
+     */
+
+    if (
+        typeof Tokenizer.create ===
+        "function"
+    ) {
+
+        return await Tokenizer.create();
+    }
+
+
+    return new Tokenizer();
+}
+
+
+/* ============================================================
+   MODELL PRÜFEN
+   ============================================================ */
+
+function getModelClass() {
+
+    if (
+        typeof window !==
+        "undefined" &&
+        window.LanguageModel
+    ) {
+
+        return window.LanguageModel;
+    }
+
+
+    if (
+        typeof LanguageModel !==
+        "undefined"
+    ) {
+
+        return LanguageModel;
+    }
+
+
+    throw new Error(
+        "LanguageModel wurde nicht gefunden. " +
+        "model.js muss vor train.js geladen werden."
+    );
+}
+
+
+/* ============================================================
+   MODELL ERSTELLEN
+   ============================================================ */
+
+function createTrainingModel(
+    tokenizer
+) {
+
+    const Model =
+        getModelClass();
+
+
+    const vocabSize =
+        tokenizer.vocabSize ||
+        tokenizer.config?.vocabSize ||
+        TRAIN_CONFIG.vocabSize ||
+        8192;
+
+
+    return new Model({
+
+        vocabSize,
+
+        contextSize:
+            TRAIN_CONFIG.sequenceLength,
+
+        embeddingSize:
+            192,
+
+        layers:
+            6,
+
+        heads:
+            6,
+
+        headSize:
+            32,
+
+        feedForwardSize:
+            512,
+
+        learningRate:
+            TRAIN_CONFIG.learningRate,
+
+        gradientClip:
+            1.0,
+
+        temperature:
+            0.85,
+
+        topK:
+            40,
+
+        topP:
+            0.92
+    });
+}
+
+
+/* ============================================================
+   TOKENIZER SPEICHERN
+   ============================================================ */
+
+function saveTokenizer(
+    tokenizer
+) {
+
+    if (
+        typeof localStorage ===
+        "undefined"
+    ) {
+        return;
+    }
+
+
+    try {
+
+        let data;
+
+
+        if (
+            typeof tokenizer.export ===
+            "function"
+        ) {
+
+            data =
+                tokenizer.export();
+
+        } else if (
+            typeof tokenizer.toJSON ===
+            "function"
+        ) {
+
+            data =
+                tokenizer.toJSON();
+
+        } else {
+
+            data =
+                JSON.stringify(
+                    tokenizer
+                );
+        }
+
+
+        localStorage.setItem(
+            TRAIN_CONFIG.tokenizerStorageKey,
+            typeof data === "string"
+                ? data
+                : JSON.stringify(data)
+        );
+
+    } catch (error) {
+
+        console.warn(
+            "Tokenizer konnte nicht gespeichert werden:",
+            error
+        );
+    }
+}
+
+
+/* ============================================================
+   MODELL SPEICHERN
+   ============================================================ */
+
+function saveModel(
+    model
+) {
+
+    if (
+        typeof localStorage ===
+        "undefined"
+    ) {
+        return;
+    }
+
+
+    try {
+
+        model.saveLocalStorage(
+            TRAIN_CONFIG.modelStorageKey
+        );
+
+        trainLog(
+            "Modell gespeichert."
+        );
+
+    } catch (error) {
+
+        console.error(
+            "Modell speichern:",
+            error
+        );
+    }
+}
+
+
+/* ============================================================
+   TRAININGSFORTSCHRITT
+   ============================================================ */
+
+function emitProgress(
+    extra
+) {
+
+    const data =
+        Object.assign(
+            {},
+            TRAIN_STATUS,
+            extra || {}
+        );
+
+
+    TrainEvents.emit(
+        "progress",
+        data
+    );
+}
+
+
+/* ============================================================
+   TRAINING STOPPEN
+   ============================================================ */
+
+function stopTraining() {
+
+    TRAIN_STATUS.stopped =
+        true;
+
+    TRAIN_STATUS.running =
+        false;
+
+
+    TrainEvents.emit(
+        "stopped",
+        TRAIN_STATUS
     );
 
-    console.log(
-        generate("hallo")
+
+    trainLog(
+        "Training wird beendet..."
+    );
+}
+
+
+/* ============================================================
+   EPOCH TRAINIEREN
+   ============================================================ */
+
+async function trainEpoch(
+    model,
+    sequences,
+    epoch
+) {
+
+    let totalLoss = 0;
+
+    let count = 0;
+
+    let totalGradient = 0;
+
+
+    for (
+        let i = 0;
+        i < sequences.length;
+        i++
+    ) {
+
+        if (
+            TRAIN_STATUS.stopped
+        ) {
+            break;
+        }
+
+
+        const tokens =
+            sequences[i];
+
+
+        try {
+
+            const result =
+                model.trainStep(
+                    tokens
+                );
+
+
+            const loss =
+                Number(
+                    result.loss || 0
+                );
+
+
+            totalLoss +=
+                loss;
+
+
+            totalGradient +=
+                Number(
+                    result.gradientNorm || 0
+                );
+
+
+            count++;
+
+
+            TRAIN_STATUS.currentExample =
+                i + 1;
+
+
+            TRAIN_STATUS.loss =
+                loss;
+
+
+            TRAIN_STATUS.averageLoss =
+                totalLoss /
+                Math.max(
+                    count,
+                    1
+                );
+
+
+            emitProgress({
+
+                epoch,
+
+                currentExample:
+                    i + 1,
+
+                totalExamples:
+                    sequences.length,
+
+                loss,
+
+                averageLoss:
+                    TRAIN_STATUS.averageLoss,
+
+                gradientNorm:
+                    result.gradientNorm || 0
+            });
+
+
+            /*
+             * Browser nicht komplett einfrieren.
+             */
+
+            if (
+                i % 2 === 0
+            ) {
+
+                await new Promise(
+                    resolve =>
+                        setTimeout(
+                            resolve,
+                            0
+                        )
+                );
+            }
+
+        } catch (error) {
+
+            console.error(
+                "Training-Fehler:",
+                error
+            );
+
+
+            TrainEvents.emit(
+                "error",
+                error
+            );
+        }
+    }
+
+
+    return {
+
+        loss:
+            count
+                ? totalLoss / count
+                : 0,
+
+        gradientNorm:
+            count
+                ? totalGradient / count
+                : 0
+    };
+}
+
+
+/* ============================================================
+   KOMPLETTES TRAINING
+   ============================================================ */
+
+async function trainAI(
+    options
+) {
+
+    options =
+        Object.assign(
+            {},
+            TRAIN_CONFIG,
+            options || {}
+        );
+
+
+    if (
+        TRAIN_STATUS.running
+    ) {
+
+        throw new Error(
+            "Training läuft bereits."
+        );
+    }
+
+
+    TRAIN_STATUS.running =
+        true;
+
+    TRAIN_STATUS.stopped =
+        false;
+
+    TRAIN_STATUS.epoch =
+        0;
+
+    TRAIN_STATUS.startedAt =
+        Date.now();
+
+
+    trainLog(
+        "========================================"
     );
 
-});
+    trainLog(
+        "EIGENES KI-TRAINING START"
+    );
+
+    trainLog(
+        "========================================"
+    );
+
+
+    /*
+     * Tokenizer
+     */
+
+    trainLog(
+        "Tokenizer wird vorbereitet..."
+    );
+
+
+    const tokenizer =
+        await createTokenizer();
+
+
+    /*
+     * Daten laden
+     */
+
+    trainLog(
+        "Lade alle DATEN/*.json ..."
+    );
+
+
+    let files =
+        await loadDefaultDataFiles();
+
+
+    /*
+     * Falls automatisch keine Dateien
+     * gefunden wurden, Dateiauswahl öffnen.
+     */
+
+    if (
+        files.length === 0
+    ) {
+
+        trainLog(
+            "Keine Standarddateien gefunden."
+        );
+
+
+        if (
+            typeof document !==
+            "undefined"
+        ) {
+
+            trainLog(
+                "Bitte DATEN-Ordner auswählen."
+            );
+
+
+            files =
+                await loadDataFolderFromPicker();
+        }
+    }
+
+
+    if (
+        files.length === 0
+    ) {
+
+        TRAIN_STATUS.running =
+            false;
+
+
+        throw new Error(
+            "Keine JSON-Trainingsdaten gefunden."
+        );
+    }
+
+
+    TRAIN_STATUS.files =
+        files.map(
+            file =>
+                file.name
+        );
+
+
+    /*
+     * Datensatz
+     */
+
+    trainLog(
+        "Erstelle Trainingsdatensatz..."
+    );
+
+
+    const examples =
+        buildTrainingDataset(
+            files
+        );
+
+
+    TRAIN_STATUS.examples =
+        examples.length;
+
+
+    trainLog(
+        "Beispiele:",
+        examples.length
+    );
+
+
+    /*
+     * Sequenzen
+     */
+
+    trainLog(
+        "Tokenisiere Trainingsdaten..."
+    );
+
+
+    const sequences =
+        createSequences(
+            tokenizer,
+            examples,
+            options.sequenceLength
+        );
+
+
+    TRAIN_STATUS.tokens =
+        sequences.reduce(
+            (
+                total,
+                sequence
+            ) =>
+                total +
+                sequence.length,
+            0
+        );
+
+
+    TRAIN_STATUS.totalExamples =
+        sequences.length;
+
+
+    trainLog(
+        "Trainingssequenzen:",
+        sequences.length
+    );
+
+
+    trainLog(
+        "Tokens:",
+        TRAIN_STATUS.tokens
+    );
+
+
+    /*
+     * Modell
+     */
+
+    trainLog(
+        "Erstelle Transformer..."
+    );
+
+
+    const model =
+        createTrainingModel(
+            tokenizer
+        );
+
+
+    trainLog(
+        "Parameter:",
+        model.parameterCount()
+    );
+
+
+    trainLog(
+        "Parameter in Millionen:",
+        (
+            model.parameterCount() /
+            1000000
+        ).toFixed(2)
+    );
+
+
+    /*
+     * Training
+     */
+
+    for (
+        let epoch = 1;
+        epoch <= options.epochs;
+        epoch++
+    ) {
+
+        if (
+            TRAIN_STATUS.stopped
+        ) {
+            break;
+        }
+
+
+        TRAIN_STATUS.epoch =
+            epoch;
+
+
+        trainLog(
+            `Epoch ${epoch}/${options.epochs}`
+        );
+
+
+        if (
+            options.shuffle
+        ) {
+
+            shuffleArray(
+                sequences
+            );
+        }
+
+
+        const result =
+            await trainEpoch(
+                model,
+                sequences,
+                epoch
+            );
+
+
+        trainLog(
+            "Loss:",
+            result.loss.toFixed(6)
+        );
+
+
+        trainLog(
+            "Gradient:",
+            result.gradientNorm.toFixed(6)
+        );
+
+
+        if (
+            options.saveEveryEpoch
+        ) {
+
+            saveModel(
+                model
+            );
+
+            saveTokenizer(
+                tokenizer
+            );
+        }
+
+
+        /*
+         * GC/Browser Zeit geben
+         */
+
+        await new Promise(
+            resolve =>
+                setTimeout(
+                    resolve,
+                    10
+                )
+        );
+    }
+
+
+    TRAIN_STATUS.running =
+        false;
+
+    TRAIN_STATUS.elapsed =
+        Date.now() -
+        TRAIN_STATUS.startedAt;
+
+
+    /*
+     * Final speichern
+     */
+
+    saveModel(
+        model
+    );
+
+    saveTokenizer(
+        tokenizer
+    );
+
+
+    trainLog(
+        "========================================"
+    );
+
+    trainLog(
+        "TRAINING BEENDET"
+    );
+
+    trainLog(
+        "========================================"
+    );
+
+
+    TrainEvents.emit(
+        "complete",
+        {
+            model,
+            tokenizer,
+            status:
+                Object.assign(
+                    {},
+                    TRAIN_STATUS
+                )
+        }
+    );
+
+
+    return {
+
+        model,
+
+        tokenizer,
+
+        examples,
+
+        sequences,
+
+        status:
+            Object.assign(
+                {},
+                TRAIN_STATUS
+            )
+    };
+}
+
+
+/* ============================================================
+   TRAINING AUS GESPEICHERTEM MODELL FORTSETZEN
+   ============================================================ */
+
+function loadSavedModel() {
+
+    const Model =
+        getModelClass();
+
+
+    const tokenizerClass =
+        getTokenizer();
+
+
+    let tokenizer =
+        null;
+
+
+    /*
+     * Tokenizer laden
+     */
+
+    if (
+        typeof localStorage !==
+        "undefined"
+    ) {
+
+        const tokenizerData =
+            localStorage.getItem(
+                TRAIN_CONFIG.tokenizerStorageKey
+            );
+
+
+        if (
+            tokenizerData
+        ) {
+
+            try {
+
+                if (
+                    typeof tokenizerClass
+                        .fromJSON ===
+                    "function"
+                ) {
+
+                    tokenizer =
+                        tokenizerClass.fromJSON(
+                            tokenizerData
+                        );
+
+                } else {
+
+                    tokenizer =
+                        new tokenizerClass();
+                }
+
+            } catch (error) {
+
+                console.warn(
+                    "Tokenizer laden fehlgeschlagen:",
+                    error
+                );
+            }
+        }
+    }
+
+
+    /*
+     * Modell
+     */
+
+    let model =
+        new Model();
+
+
+    try {
+
+        if (
+            typeof localStorage !==
+            "undefined"
+        ) {
+
+            const modelData =
+                localStorage.getItem(
+                    TRAIN_CONFIG.modelStorageKey
+                );
+
+
+            if (
+                modelData
+            ) {
+
+                model.load(
+                    JSON.parse(
+                        modelData
+                    )
+                );
+            }
+        }
+
+    } catch (error) {
+
+        console.warn(
+            "Modell laden fehlgeschlagen:",
+            error
+        );
+    }
+
+
+    return {
+
+        model,
+
+        tokenizer
+    };
+}
+
+
+/* ============================================================
+   TRAININGSVORSCHAU
+   ============================================================ */
+
+async function previewTrainingData() {
+
+    const files =
+        await loadDefaultDataFiles();
+
+
+    const examples =
+        buildTrainingDataset(
+            files
+        );
+
+
+    return {
+
+        files:
+            files.map(
+                x => x.name
+            ),
+
+        examples:
+            examples.length,
+
+        preview:
+            examples
+                .slice(0, 20)
+                .map(
+                    x => x.text
+                )
+    };
+}
+
+
+/* ============================================================
+   TEST NACH DEM TRAINING
+   ============================================================ */
+
+function testModel(
+    model,
+    tokenizer,
+    prompt
+) {
+
+    if (
+        !model ||
+        !tokenizer
+    ) {
+
+        throw new Error(
+            "Model und Tokenizer erforderlich."
+        );
+    }
+
+
+    const result =
+        model.generate(
+            prompt,
+            tokenizer,
+            {
+                maxTokens: 100,
+
+                temperature:
+                    0.8,
+
+                topK:
+                    40,
+
+                topP:
+                    0.92,
+
+                repetitionPenalty:
+                    1.08
+            }
+        );
+
+
+    trainLog(
+        "PROMPT:",
+        prompt
+    );
+
+
+    trainLog(
+        "ANTWORT:",
+        result
+    );
+
+
+    return result;
+}
+
+
+/* ============================================================
+   GLOBAL
+   ============================================================ */
+
+if (
+    typeof window !==
+    "undefined"
+) {
+
+    window.TRAIN_CONFIG =
+        TRAIN_CONFIG;
+
+    window.TRAIN_STATUS =
+        TRAIN_STATUS;
+
+    window.TrainEvents =
+        TrainEvents;
+
+    window.trainAI =
+        trainAI;
+
+    window.stopTraining =
+        stopTraining;
+
+    window.loadDefaultDataFiles =
+        loadDefaultDataFiles;
+
+    window.loadDataFolderFromPicker =
+        loadDataFolderFromPicker;
+
+    window.buildTrainingDataset =
+        buildTrainingDataset;
+
+    window.createSequences =
+        createSequences;
+
+    window.previewTrainingData =
+        previewTrainingData;
+
+    window.loadSavedModel =
+        loadSavedModel;
+
+    window.testModel =
+        testModel;
+}
+
+
+/* ============================================================
+   NODE.JS
+   ============================================================ */
+
+if (
+    typeof module !== "undefined" &&
+    module.exports
+) {
+
+    module.exports = {
+
+        TRAIN_CONFIG,
+
+        TRAIN_STATUS,
+
+        TrainEvents,
+
+        trainAI,
+
+        stopTraining,
+
+        loadDefaultDataFiles,
+
+        loadDataFolderFromPicker,
+
+        buildTrainingDataset,
+
+        createSequences,
+
+        previewTrainingData,
+
+        loadSavedModel,
+
+        testModel
+    };
+}
