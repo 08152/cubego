@@ -1,2936 +1,3794 @@
-/* ============================================================
-   model.js
-   ============================================================
-   Eigener Transformer-Sprachmodell-Kern
-   - Keine externen Bibliotheken
-   - Token Embeddings
-   - Positionsinformationen
-   - Multi-Head Self Attention
-   - Causal Attention Mask
-   - RMSNorm
-   - SwiGLU Feed Forward
-   - Residual Connections
-   - Output Projection
-   - Softmax
-   - Temperature
-   - Top-K
-   - Top-P
-   - Repetition Penalty
-   - Sampling
-   - KV-Cache
-   - Training mit Backpropagation
-   - AdamW
-   - Gradient Clipping
-   - Modell speichern/laden
-   - Browser + Node kompatibel
-   ============================================================ */
-
-(function (global) {
 "use strict";
 
-/* ============================================================
-   KONFIGURATION
-   ============================================================ */
+/*
+===========================================================
+ LUMORA PRO / LARGE
+ Hybrid Language Model
+
+ Hauptziel:
+ - JSON-Daten aus DATEN/ zuverlässig verarbeiten
+ - konkrete Q&A-Daten stark lernen
+ - neuronalen Fallback bereitstellen
+ - stabil speichern/laden
+===========================================================
+*/
+
+const fs = require("fs");
+const path = require("path");
+
+/* =========================================================
+   DEFAULT CONFIG
+========================================================= */
 
 const DEFAULT_CONFIG = {
+  modelType: "LUMORA-PRO",
 
-    vocabSize: 8192,
+  vocabSize: 8192,
 
-    contextSize: 256,
+  contextSize: 256,
 
-    embeddingSize: 192,
+  embeddingSize: 128,
 
-    layers: 6,
+  layers: 4,
 
-    heads: 6,
+  heads: 4,
 
-    headSize: 32,
+  headSize: 32,
 
-    feedForwardSize: 512,
+  feedForwardSize: 512,
 
-    dropout: 0.0,
+  maxNgramOrder: 8,
 
-    rmsEpsilon: 1e-5,
+  maxNgramEntries: 100000,
 
-    learningRate: 0.0003,
+  learningRate: 0.00025,
 
-    beta1: 0.9,
+  minLearningRate: 0.00002,
 
-    beta2: 0.95,
+  temperature: 0.75,
 
-    weightDecay: 0.01,
+  topK: 40,
 
-    gradientClip: 1.0,
+  topP: 0.92,
 
-    temperature: 0.85,
+  repetitionPenalty: 1.08,
 
-    topK: 40,
-
-    topP: 0.92,
-
-    repetitionPenalty: 1.08,
-
-    minTemperature: 0.15,
-
-    maxTemperature: 2.0,
-
-    seed: 123456789
+  seed: 1337
 };
 
 
-/* ============================================================
-   HILFSFUNKTIONEN
-   ============================================================ */
+/* =========================================================
+   HELPER
+========================================================= */
 
-function cloneConfig(config) {
-    return Object.assign({}, DEFAULT_CONFIG, config || {});
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function randomFloat() {
-    return Math.random();
+
+function randomSeeded(seed) {
+  let s = seed >>> 0;
+
+  return function () {
+    s += 0x6D2B79F5;
+
+    let t = s;
+
+    t = Math.imul(
+      t ^ (t >>> 15),
+      t | 1
+    );
+
+    t ^= t +
+      Math.imul(
+        t ^ (t >>> 7),
+        t | 61
+      );
+
+    return (
+      (
+        (t ^ (t >>> 14)) >>> 0
+      ) / 4294967296
+    );
+  };
 }
 
-function clamp(x, a, b) {
-    return Math.max(a, Math.min(b, x));
+
+function randNormal(rng) {
+  let u = 0;
+  let v = 0;
+
+  while (u === 0) {
+    u = rng();
+  }
+
+  while (v === 0) {
+    v = rng();
+  }
+
+  return Math.sqrt(
+    -2 * Math.log(u)
+  ) *
+  Math.cos(
+    2 * Math.PI * v
+  );
 }
 
-function zeros(n) {
-    return new Float32Array(n);
-}
 
-function randomNormal() {
+function softmax(logits, temperature = 1) {
 
-    let u = 0;
-    let v = 0;
+  temperature =
+    Math.max(
+      0.05,
+      Number(temperature) || 1
+    );
 
-    while (u === 0) u = Math.random();
-    while (v === 0) v = Math.random();
+  let max = -Infinity;
 
-    return Math.sqrt(-2 * Math.log(u)) *
-           Math.cos(2 * Math.PI * v);
-}
+  for (
+    let i = 0;
+    i < logits.length;
+    i++
+  ) {
 
-function randomNormalArray(size, scale) {
+    const value =
+      logits[i] /
+      temperature;
 
-    const a = new Float32Array(size);
-
-    for (let i = 0; i < size; i++) {
-        a[i] = randomNormal() * scale;
+    if (value > max) {
+      max = value;
     }
+  }
 
-    return a;
-}
+  const probabilities =
+    new Float32Array(
+      logits.length
+    );
 
-function initMatrix(rows, cols, scale) {
+  let sum = 0;
 
-    return {
-        rows,
-        cols,
-        data: randomNormalArray(
-            rows * cols,
-            scale || Math.sqrt(2 / (rows + cols))
+  for (
+    let i = 0;
+    i < logits.length;
+    i++
+  ) {
+
+    const value =
+      Math.exp(
+        clamp(
+          logits[i] /
+            temperature -
+            max,
+          -80,
+          0
         )
-    };
+      );
+
+    probabilities[i] = value;
+    sum += value;
+  }
+
+  if (
+    !Number.isFinite(sum) ||
+    sum <= 0
+  ) {
+
+    const value =
+      1 /
+      logits.length;
+
+    probabilities.fill(value);
+
+    return probabilities;
+  }
+
+  for (
+    let i = 0;
+    i < probabilities.length;
+    i++
+  ) {
+    probabilities[i] /=
+      sum;
+  }
+
+  return probabilities;
 }
 
-function matrixIndex(m, r, c) {
-    return r * m.cols + c;
-}
 
-function matVec(m, vector) {
+function gelu(x) {
 
-    const result = new Float32Array(m.rows);
-
-    for (let r = 0; r < m.rows; r++) {
-
-        let sum = 0;
-        const offset = r * m.cols;
-
-        for (let c = 0; c < m.cols; c++) {
-            sum += m.data[offset + c] * vector[c];
-        }
-
-        result[r] = sum;
-    }
-
-    return result;
-}
-
-function vecMat(vector, m) {
-
-    const result = new Float32Array(m.cols);
-
-    for (let c = 0; c < m.cols; c++) {
-
-        let sum = 0;
-
-        for (let r = 0; r < m.rows; r++) {
-            sum += vector[r] * m.data[r * m.cols + c];
-        }
-
-        result[c] = sum;
-    }
-
-    return result;
-}
-
-function addVectors(a, b) {
-
-    const result = new Float32Array(a.length);
-
-    for (let i = 0; i < a.length; i++) {
-        result[i] = a[i] + b[i];
-    }
-
-    return result;
-}
-
-function softmax(logits, temperature) {
-
-    const result = new Float32Array(logits.length);
-
-    const t = Math.max(
-        0.0001,
-        temperature || 1
+  const c =
+    Math.sqrt(
+      2 / Math.PI
     );
 
-    let max = -Infinity;
-
-    for (let i = 0; i < logits.length; i++) {
-
-        const x = logits[i] / t;
-
-        if (x > max) {
-            max = x;
-        }
-    }
-
-    let sum = 0;
-
-    for (let i = 0; i < logits.length; i++) {
-
-        const x = Math.exp(
-            clamp(
-                logits[i] / t - max,
-                -80,
-                80
-            )
-        );
-
-        result[i] = x;
-        sum += x;
-    }
-
-    if (sum === 0 || !Number.isFinite(sum)) {
-
-        const uniform = 1 / logits.length;
-
-        for (let i = 0; i < result.length; i++) {
-            result[i] = uniform;
-        }
-
-        return result;
-    }
-
-    for (let i = 0; i < result.length; i++) {
-        result[i] /= sum;
-    }
-
-    return result;
-}
-
-function argmax(array) {
-
-    let best = 0;
-
-    for (let i = 1; i < array.length; i++) {
-
-        if (array[i] > array[best]) {
-            best = i;
-        }
-    }
-
-    return best;
-}
-
-function sampleDistribution(probabilities) {
-
-    let r = Math.random();
-
-    for (let i = 0; i < probabilities.length; i++) {
-
-        r -= probabilities[i];
-
-        if (r <= 0) {
-            return i;
-        }
-    }
-
-    return probabilities.length - 1;
-}
-
-function rmsNorm(x, weight, epsilon) {
-
-    let sum = 0;
-
-    for (let i = 0; i < x.length; i++) {
-        sum += x[i] * x[i];
-    }
-
-    const inv = 1 / Math.sqrt(
-        sum / x.length + epsilon
-    );
-
-    const result = new Float32Array(x.length);
-
-    for (let i = 0; i < x.length; i++) {
-        result[i] = x[i] * inv * weight[i];
-    }
-
-    return result;
-}
-
-function silu(x) {
-    return x / (1 + Math.exp(-clamp(x, -30, 30)));
-}
-
-function softplus(x) {
-
-    if (x > 20) {
-        return x;
-    }
-
-    return Math.log(
-        1 + Math.exp(x)
-    );
-}
-
-function swiglu(x, gate) {
-
-    const result = new Float32Array(x.length);
-
-    for (let i = 0; i < x.length; i++) {
-
-        const s = silu(gate[i]);
-
-        result[i] = x[i] * s;
-    }
-
-    return result;
-}
-
-function randomChoiceWeighted(items) {
-
-    let total = 0;
-
-    for (const item of items) {
-        total += item.probability;
-    }
-
-    if (total <= 0) {
-        return items[
-            Math.floor(Math.random() * items.length)
-        ].token;
-    }
-
-    let r = Math.random() * total;
-
-    for (const item of items) {
-
-        r -= item.probability;
-
-        if (r <= 0) {
-            return item.token;
-        }
-    }
-
-    return items[items.length - 1].token;
+  return (
+    0.5 *
+    x *
+    (
+      1 +
+      Math.tanh(
+        c *
+        (
+          x +
+          0.044715 *
+          x *
+          x *
+          x
+        )
+      )
+    )
+  );
 }
 
 
-/* ============================================================
-   TOP-K
-   ============================================================ */
-
-function applyTopK(probabilities, k) {
-
-    if (!k || k >= probabilities.length) {
-        return probabilities;
-    }
-
-    const indexes = [];
-
-    for (let i = 0; i < probabilities.length; i++) {
-        indexes.push(i);
-    }
-
-    indexes.sort(
-        (a, b) => probabilities[b] - probabilities[a]
-    );
-
-    const allowed = new Set(
-        indexes.slice(0, k)
-    );
-
-    const result = new Float32Array(
-        probabilities.length
-    );
-
-    let sum = 0;
-
-    for (let i = 0; i < probabilities.length; i++) {
-
-        if (allowed.has(i)) {
-
-            result[i] = probabilities[i];
-            sum += probabilities[i];
-        }
-    }
-
-    if (sum > 0) {
-
-        for (let i = 0; i < result.length; i++) {
-            result[i] /= sum;
-        }
-    }
-
-    return result;
-}
-
-
-/* ============================================================
-   TOP-P
-   ============================================================ */
-
-function applyTopP(probabilities, p) {
-
-    if (!p || p >= 1) {
-        return probabilities;
-    }
-
-    const sorted = [];
-
-    for (let i = 0; i < probabilities.length; i++) {
-
-        sorted.push({
-            token: i,
-            probability: probabilities[i]
-        });
-    }
-
-    sorted.sort(
-        (a, b) =>
-            b.probability - a.probability
-    );
-
-    const allowed = new Set();
-
-    let cumulative = 0;
-
-    for (const item of sorted) {
-
-        allowed.add(item.token);
-
-        cumulative += item.probability;
-
-        if (cumulative >= p) {
-            break;
-        }
-    }
-
-    const result = new Float32Array(
-        probabilities.length
-    );
-
-    let sum = 0;
-
-    for (let i = 0; i < probabilities.length; i++) {
-
-        if (allowed.has(i)) {
-
-            result[i] = probabilities[i];
-            sum += probabilities[i];
-        }
-    }
-
-    if (sum > 0) {
-
-        for (let i = 0; i < result.length; i++) {
-            result[i] /= sum;
-        }
-    }
-
-    return result;
-}
-
-
-/* ============================================================
-   REPETITION PENALTY
-   ============================================================ */
-
-function applyRepetitionPenalty(
-    logits,
-    previousTokens,
-    penalty
-) {
-
-    if (!penalty || penalty <= 1) {
-        return logits;
-    }
-
-    const result = new Float32Array(logits);
-
-    const used = new Set(
-        previousTokens
-    );
-
-    for (const token of used) {
-
-        if (token < 0 || token >= result.length) {
-            continue;
-        }
-
-        if (result[token] > 0) {
-            result[token] /= penalty;
-        } else {
-            result[token] *= penalty;
-        }
-    }
-
-    return result;
-}
-
-
-/* ============================================================
+/* =========================================================
    PARAMETER
-   ============================================================ */
+========================================================= */
 
 class Parameter {
 
-    constructor(name, size, scale) {
+  constructor(
+    size,
+    rng,
+    std = 0.02
+  ) {
 
-        this.name = name;
+    this.data =
+      new Float32Array(size);
 
-        this.data =
-            randomNormalArray(
-                size,
-                scale || 0.02
-            );
+    this.grad =
+      new Float32Array(size);
 
-        this.grad =
-            new Float32Array(size);
+    this.m =
+      new Float32Array(size);
 
-        this.m =
-            new Float32Array(size);
+    this.v =
+      new Float32Array(size);
 
-        this.v =
-            new Float32Array(size);
+    for (
+      let i = 0;
+      i < size;
+      i++
+    ) {
+
+      this.data[i] =
+        randNormal(rng) * std;
     }
+  }
 
-    zeroGrad() {
-
-        this.grad.fill(0);
-    }
+  zeroGrad() {
+    this.grad.fill(0);
+  }
 }
 
 
-/* ============================================================
+/* =========================================================
+   LAYER NORMALIZATION
+========================================================= */
+
+class LayerNorm {
+
+  constructor(
+    size,
+    rng
+  ) {
+
+    this.size = size;
+
+    this.gamma =
+      new Parameter(
+        size,
+        rng,
+        0
+      );
+
+    this.beta =
+      new Parameter(
+        size,
+        rng,
+        0
+      );
+
+    this.gamma.data.fill(1);
+    this.beta.data.fill(0);
+  }
+
+  forward(input) {
+
+    let mean = 0;
+
+    for (
+      let i = 0;
+      i < this.size;
+      i++
+    ) {
+      mean += input[i];
+    }
+
+    mean /=
+      this.size;
+
+    let variance = 0;
+
+    for (
+      let i = 0;
+      i < this.size;
+      i++
+    ) {
+
+      const d =
+        input[i] -
+        mean;
+
+      variance +=
+        d * d;
+    }
+
+    variance /=
+      this.size;
+
+    const invStd =
+      1 /
+      Math.sqrt(
+        variance + 1e-5
+      );
+
+    const result =
+      new Float32Array(
+        this.size
+      );
+
+    for (
+      let i = 0;
+      i < this.size;
+      i++
+    ) {
+
+      result[i] =
+        (
+          (
+            input[i] -
+            mean
+          ) *
+          invStd
+        ) *
+        this.gamma.data[i]
+        +
+        this.beta.data[i];
+    }
+
+    return result;
+  }
+}
+
+
+/* =========================================================
    TRANSFORMER BLOCK
-   ============================================================ */
+========================================================= */
 
 class TransformerBlock {
 
-    constructor(config, layerIndex) {
+  constructor(
+    config,
+    rng
+  ) {
 
-        this.config = config;
+    this.config =
+      config;
 
-        this.layerIndex =
-            layerIndex;
+    const d =
+      config.embeddingSize;
 
-        const d = config.embeddingSize;
-        const ff = config.feedForwardSize;
+    const attentionSize =
+      config.heads *
+      config.headSize;
 
-        const init = Math.sqrt(
-            2 / d
-        );
+    const ff =
+      config.feedForwardSize;
 
-        /*
-         * Attention
-         */
+    this.q =
+      new Parameter(
+        d * attentionSize,
+        rng,
+        0.02
+      );
 
-        this.q = new Parameter(
-            `layer.${layerIndex}.attention.q`,
-            d * d,
-            init
-        );
+    this.k =
+      new Parameter(
+        d * attentionSize,
+        rng,
+        0.02
+      );
 
-        this.k = new Parameter(
-            `layer.${layerIndex}.attention.k`,
-            d * d,
-            init
-        );
+    this.v =
+      new Parameter(
+        d * attentionSize,
+        rng,
+        0.02
+      );
 
-        this.v = new Parameter(
-            `layer.${layerIndex}.attention.v`,
-            d * d,
-            init
-        );
+    this.o =
+      new Parameter(
+        attentionSize * d,
+        rng,
+        0.02
+      );
 
-        this.o = new Parameter(
-            `layer.${layerIndex}.attention.o`,
-            d * d,
-            init
-        );
+    this.ff1 =
+      new Parameter(
+        d * ff,
+        rng,
+        0.02
+      );
+
+    this.ff2 =
+      new Parameter(
+        ff * d,
+        rng,
+        0.02
+      );
+
+    this.ffBias1 =
+      new Parameter(
+        ff,
+        rng,
+        0
+      );
+
+    this.ffBias2 =
+      new Parameter(
+        d,
+        rng,
+        0
+      );
+
+    this.norm1 =
+      new LayerNorm(
+        d,
+        rng
+      );
+
+    this.norm2 =
+      new LayerNorm(
+        d,
+        rng
+      );
+  }
 
 
-        /*
-         * SwiGLU
-         */
+  linear(
+    matrix,
+    bias,
+    input,
+    outputSize,
+    inputSize
+  ) {
 
-        this.ffGate = new Parameter(
-            `layer.${layerIndex}.ff.gate`,
-            ff * d,
-            Math.sqrt(2 / d)
-        );
+    const result =
+      new Float32Array(
+        outputSize
+      );
 
-        this.ffUp = new Parameter(
-            `layer.${layerIndex}.ff.up`,
-            ff * d,
-            Math.sqrt(2 / d)
-        );
+    for (
+      let row = 0;
+      row < outputSize;
+      row++
+    ) {
 
-        this.ffDown = new Parameter(
-            `layer.${layerIndex}.ff.down`,
-            d * ff,
-            Math.sqrt(2 / ff)
-        );
+      let sum =
+        bias
+          ? bias[row]
+          : 0;
+
+      const start =
+        row *
+        inputSize;
+
+      for (
+        let col = 0;
+        col < inputSize;
+        col++
+      ) {
+
+        sum +=
+          matrix[
+            start + col
+          ] *
+          input[col];
+      }
+
+      result[row] =
+        sum;
+    }
+
+    return result;
+  }
 
 
-        /*
-         * RMSNorm
-         */
+  forward(sequence) {
 
-        this.norm1 =
-            new Parameter(
-                `layer.${layerIndex}.norm1`,
-                d,
-                0
-            );
+    const cfg =
+      this.config;
 
-        this.norm2 =
-            new Parameter(
-                `layer.${layerIndex}.norm2`,
-                d,
-                0
-            );
+    const d =
+      cfg.embeddingSize;
 
-        this.norm1.data.fill(1);
-        this.norm2.data.fill(1);
+    const heads =
+      cfg.heads;
+
+    const headSize =
+      cfg.headSize;
+
+    const attentionSize =
+      heads *
+      headSize;
+
+    const length =
+      sequence.length;
+
+    if (length === 0) {
+      return [];
     }
 
 
-    project(parameter, vector) {
+    /* -------------------------
+       PRE-NORM
+    ------------------------- */
 
-        const matrix = {
-            rows: Math.floor(
-                parameter.data.length /
-                vector.length
-            ),
-            cols: vector.length,
-            data: parameter.data
-        };
+    const normalized =
+      new Array(length);
 
-        return matVec(
-            matrix,
-            vector
-        );
-    }
+    for (
+      let i = 0;
+      i < length;
+      i++
+    ) {
 
-
-    attention(xSequence) {
-
-        const d =
-            this.config.embeddingSize;
-
-        const heads =
-            this.config.heads;
-
-        const headSize =
-            this.config.headSize;
-
-        const length =
-            xSequence.length;
-
-
-        const Q = [];
-        const K = [];
-        const V = [];
-
-
-        for (let t = 0; t < length; t++) {
-
-            Q.push(
-                this.project(
-                    this.q,
-                    xSequence[t]
-                )
-            );
-
-            K.push(
-                this.project(
-                    this.k,
-                    xSequence[t]
-                )
-            );
-
-            V.push(
-                this.project(
-                    this.v,
-                    xSequence[t]
-                )
-            );
-        }
-
-
-        const outputs = [];
-
-
-        for (let t = 0; t < length; t++) {
-
-            const combined =
-                new Float32Array(d);
-
-
-            for (
-                let h = 0;
-                h < heads;
-                h++
-            ) {
-
-                const start =
-                    h * headSize;
-
-                const end =
-                    start + headSize;
-
-
-                const scores = [];
-
-
-                for (
-                    let j = 0;
-                    j <= t;
-                    j++
-                ) {
-
-                    let dot = 0;
-
-                    for (
-                        let c = start;
-                        c < end;
-                        c++
-                    ) {
-
-                        dot +=
-                            Q[t][c] *
-                            K[j][c];
-                    }
-
-                    dot /=
-                        Math.sqrt(headSize);
-
-                    scores.push(dot);
-                }
-
-
-                /*
-                 * Causal softmax
-                 */
-
-                let max =
-                    -Infinity;
-
-                for (const s of scores) {
-
-                    if (s > max) {
-                        max = s;
-                    }
-                }
-
-
-                let sum = 0;
-
-                const weights =
-                    new Float32Array(
-                        scores.length
-                    );
-
-
-                for (
-                    let j = 0;
-                    j < scores.length;
-                    j++
-                ) {
-
-                    weights[j] =
-                        Math.exp(
-                            clamp(
-                                scores[j] - max,
-                                -80,
-                                80
-                            )
-                        );
-
-                    sum += weights[j];
-                }
-
-
-                if (sum === 0) {
-                    sum = 1;
-                }
-
-
-                for (
-                    let j = 0;
-                    j < weights.length;
-                    j++
-                ) {
-
-                    weights[j] /= sum;
-
-
-                    for (
-                        let c = start;
-                        c < end;
-                        c++
-                    ) {
-
-                        combined[c] +=
-                            weights[j] *
-                            V[j][c];
-                    }
-                }
-            }
-
-
-            outputs.push(
-                this.project(
-                    this.o,
-                    combined
-                )
-            );
-        }
-
-
-        return outputs;
-    }
-
-
-    feedForward(x) {
-
-        const gate =
-            this.project(
-                this.ffGate,
-                x
-            );
-
-        const up =
-            this.project(
-                this.ffUp,
-                x
-            );
-
-        const activated =
-            swiglu(
-                up,
-                gate
-            );
-
-        return this.project(
-            this.ffDown,
-            activated
+      normalized[i] =
+        this.norm1.forward(
+          sequence[i]
         );
     }
 
 
-    forward(sequence) {
+    /* -------------------------
+       Q K V
+    ------------------------- */
 
-        /*
-         * Pre-Norm Attention
-         */
+    const Q =
+      new Array(length);
 
-        const normalized1 = [];
+    const K =
+      new Array(length);
 
-        for (const x of sequence) {
+    const V =
+      new Array(length);
 
-            normalized1.push(
-                rmsNorm(
-                    x,
-                    this.norm1.data,
-                    this.config.rmsEpsilon
-                )
-            );
-        }
+    for (
+      let t = 0;
+      t < length;
+      t++
+    ) {
+
+      Q[t] =
+        this.linear(
+          this.q.data,
+          null,
+          normalized[t],
+          attentionSize,
+          d
+        );
+
+      K[t] =
+        this.linear(
+          this.k.data,
+          null,
+          normalized[t],
+          attentionSize,
+          d
+        );
+
+      V[t] =
+        this.linear(
+          this.v.data,
+          null,
+          normalized[t],
+          attentionSize,
+          d
+        );
+    }
 
 
-        const attention =
-            this.attention(
-                normalized1
-            );
+    /* -------------------------
+       CAUSAL ATTENTION
+    ------------------------- */
 
+    const attentionResult =
+      new Array(length);
 
-        const afterAttention = [];
+    const scale =
+      1 /
+      Math.sqrt(headSize);
 
+    for (
+      let t = 0;
+      t < length;
+      t++
+    ) {
+
+      const combined =
+        new Float32Array(
+          attentionSize
+        );
+
+      for (
+        let head = 0;
+        head < heads;
+        head++
+      ) {
+
+        const offset =
+          head *
+          headSize;
+
+        const scores =
+          new Float32Array(
+            t + 1
+          );
+
+        let maxScore =
+          -Infinity;
 
         for (
-            let i = 0;
-            i < sequence.length;
-            i++
+          let j = 0;
+          j <= t;
+          j++
         ) {
 
-            afterAttention.push(
-                addVectors(
-                    sequence[i],
-                    attention[i]
-                )
-            );
+          let score = 0;
+
+          for (
+            let x = 0;
+            x < headSize;
+            x++
+          ) {
+
+            score +=
+              Q[t][
+                offset + x
+              ] *
+              K[j][
+                offset + x
+              ];
+          }
+
+          score *= scale;
+
+          scores[j] =
+            score;
+
+          if (
+            score >
+            maxScore
+          ) {
+            maxScore =
+              score;
+          }
         }
 
-
-        /*
-         * Pre-Norm Feed Forward
-         */
-
-        const normalized2 = [];
-
-        for (const x of afterAttention) {
-
-            normalized2.push(
-                rmsNorm(
-                    x,
-                    this.norm2.data,
-                    this.config.rmsEpsilon
-                )
-            );
-        }
-
-
-        const result = [];
-
+        let sum = 0;
 
         for (
-            let i = 0;
-            i < normalized2.length;
-            i++
+          let j = 0;
+          j <= t;
+          j++
         ) {
 
-            const ff =
-                this.feedForward(
-                    normalized2[i]
-                );
-
-            result.push(
-                addVectors(
-                    afterAttention[i],
-                    ff
-                )
+          scores[j] =
+            Math.exp(
+              clamp(
+                scores[j] -
+                  maxScore,
+                -60,
+                0
+              )
             );
+
+          sum +=
+            scores[j];
         }
 
+        if (sum <= 0) {
+          sum = 1;
+        }
 
-        return result;
+        for (
+          let j = 0;
+          j <= t;
+          j++
+        ) {
+
+          const weight =
+            scores[j] /
+            sum;
+
+          for (
+            let x = 0;
+            x < headSize;
+            x++
+          ) {
+
+            combined[
+              offset + x
+            ] +=
+              weight *
+              V[j][
+                offset + x
+              ];
+          }
+        }
+      }
+
+
+      attentionResult[t] =
+        this.linear(
+          this.o.data,
+          null,
+          combined,
+          d,
+          attentionSize
+        );
     }
+
+
+    /* -------------------------
+       RESIDUAL 1
+    ------------------------- */
+
+    const residual =
+      new Array(length);
+
+    for (
+      let t = 0;
+      t < length;
+      t++
+    ) {
+
+      const out =
+        new Float32Array(d);
+
+      for (
+        let i = 0;
+        i < d;
+        i++
+      ) {
+
+        out[i] =
+          sequence[t][i] +
+          attentionResult[t][i];
+      }
+
+      residual[t] =
+        out;
+    }
+
+
+    /* -------------------------
+       FEED FORWARD
+    ------------------------- */
+
+    const output =
+      new Array(length);
+
+    for (
+      let t = 0;
+      t < length;
+      t++
+    ) {
+
+      const normalized2 =
+        this.norm2.forward(
+          residual[t]
+        );
+
+
+      const hidden =
+        this.linear(
+          this.ff1.data,
+          this.ffBias1.data,
+          normalized2,
+          cfg.feedForwardSize,
+          d
+        );
+
+
+      for (
+        let i = 0;
+        i < hidden.length;
+        i++
+      ) {
+
+        hidden[i] =
+          gelu(
+            hidden[i]
+          );
+      }
+
+
+      const ffOutput =
+        this.linear(
+          this.ff2.data,
+          this.ffBias2.data,
+          hidden,
+          d,
+          cfg.feedForwardSize
+        );
+
+
+      const final =
+        new Float32Array(d);
+
+      for (
+        let i = 0;
+        i < d;
+        i++
+      ) {
+
+        final[i] =
+          residual[t][i] +
+          ffOutput[i];
+      }
+
+      output[t] =
+        final;
+    }
+
+    return output;
+  }
 }
 
 
-/* ============================================================
-   MODELL
-   ============================================================ */
+/* =========================================================
+   LUMORA
+========================================================= */
 
 class LanguageModel {
 
-    constructor(userConfig) {
+  constructor(
+    config = {}
+  ) {
 
-        this.config =
-            cloneConfig(
-                userConfig
-            );
-
-        const c = this.config;
-
-        if (
-            c.embeddingSize !==
-            c.heads * c.headSize
-        ) {
-
-            throw new Error(
-                "embeddingSize muss heads * headSize entsprechen."
-            );
-        }
+    this.config = {
+      ...DEFAULT_CONFIG,
+      ...config
+    };
 
 
-        /*
-         * Token Embedding
-         */
+    /* -------------------------
+       Konsistenz
+    ------------------------- */
 
-        this.tokenEmbedding =
-            new Parameter(
-                "token_embedding",
-                c.vocabSize *
-                c.embeddingSize,
-                0.02
-            );
+    this.config.headSize =
+      Math.max(
+        1,
+        Number(
+          this.config.headSize
+        ) || 32
+      );
 
+    this.config.heads =
+      Math.max(
+        1,
+        Number(
+          this.config.heads
+        ) || 4
+      );
 
-        /*
-         * Position Embedding
-         */
-
-        this.positionEmbedding =
-            new Parameter(
-                "position_embedding",
-                c.contextSize *
-                c.embeddingSize,
-                0.01
-            );
-
-
-        /*
-         * Transformer Layers
-         */
-
-        this.blocks = [];
-
-        for (
-            let i = 0;
-            i < c.layers;
-            i++
-        ) {
-
-            this.blocks.push(
-                new TransformerBlock(
-                    c,
-                    i
-                )
-            );
-        }
+    this.config.embeddingSize =
+      this.config.heads *
+      this.config.headSize;
 
 
-        /*
-         * Final Norm
-         */
-
-        this.finalNorm =
-            new Parameter(
-                "final_norm",
-                c.embeddingSize,
-                0
-            );
-
-        this.finalNorm.data.fill(1);
+    this.rng =
+      randomSeeded(
+        this.config.seed
+      );
 
 
-        /*
-         * Output Bias
-         */
+    const vocabSize =
+      this.config.vocabSize;
 
-        this.outputBias =
-            new Parameter(
-                "output_bias",
-                c.vocabSize,
-                0
-            );
+    const d =
+      this.config.embeddingSize;
 
 
-        /*
-         * Output Projection
-         *
-         * Gewicht wird mit Token-Embedding geteilt.
-         * Dadurch erhält das Modell einen deutlich
-         * sinnvolleren Sprachmodell-Aufbau.
-         */
+    /* -------------------------
+       Embeddings
+    ------------------------- */
 
-        this.trainingStep = 0;
+    this.tokenEmbedding =
+      new Parameter(
+        vocabSize * d,
+        this.rng,
+        0.025
+      );
 
-        this.cache = null;
+
+    this.positionEmbedding =
+      new Parameter(
+        this.config.contextSize * d,
+        this.rng,
+        0.01
+      );
+
+
+    this.outputBias =
+      new Parameter(
+        vocabSize,
+        this.rng,
+        0
+      );
+
+
+    /* -------------------------
+       Transformer
+    ------------------------- */
+
+    this.blocks = [];
+
+    for (
+      let i = 0;
+      i < this.config.layers;
+      i++
+    ) {
+
+      this.blocks.push(
+        new TransformerBlock(
+          this.config,
+          this.rng
+        )
+      );
     }
 
 
-    /*
-     * Token Embedding holen
-     */
+    /* =====================================================
+       WICHTIG:
+       TRAININGSMEMORY
 
-    getTokenEmbedding(token) {
+       key:
+         Kontext-Token-IDs
 
-        const d =
-            this.config.embeddingSize;
+       value:
+         nächste Token + Anzahl
+    ===================================================== */
 
-        const result =
-            new Float32Array(d);
+    this.ngrams =
+      new Map();
 
-        const offset =
-            token * d;
 
-        for (let i = 0; i < d; i++) {
+    /* =====================================================
+       Gelerntes Q&A
+    ===================================================== */
 
-            result[i] =
-                this.tokenEmbedding
-                    .data[offset + i];
-        }
+    this.trainingExamples =
+      [];
 
-        return result;
+
+    this.trainingStep =
+      0;
+
+    this.totalTokensSeen =
+      0;
+
+    this.lastLoss =
+      null;
+
+    this.loadedTrainingFiles =
+      0;
+
+    this.loadedTrainingExamples =
+      0;
+  }
+
+
+  /* =======================================================
+     DATEN LADEN
+  ======================================================= */
+
+  static findJSONFiles(
+    dataDirectory
+  ) {
+
+    const result = [];
+
+    if (
+      !fs.existsSync(
+        dataDirectory
+      )
+    ) {
+      return result;
     }
 
 
-    /*
-     * Positionsembedding
-     */
+    function scan(directory) {
 
-    getPositionEmbedding(position) {
+      let entries;
 
-        const d =
-            this.config.embeddingSize;
+      try {
 
-        const result =
-            new Float32Array(d);
-
-        const offset =
-            position * d;
-
-        for (let i = 0; i < d; i++) {
-
-            result[i] =
-                this.positionEmbedding
-                    .data[offset + i];
-        }
-
-        return result;
-    }
-
-
-    /*
-     * Eingabe in Vektoren umwandeln
-     */
-
-    embed(tokens) {
-
-        const sequence = [];
-
-        const start =
-            Math.max(
-                0,
-                tokens.length -
-                this.config.contextSize
-            );
-
-        for (
-            let i = start;
-            i < tokens.length;
-            i++
-        ) {
-
-            const token =
-                tokens[i];
-
-            const absolutePosition =
-                i - start;
-
-
-            const tokenVector =
-                this.getTokenEmbedding(
-                    token
-                );
-
-            const positionVector =
-                this.getPositionEmbedding(
-                    absolutePosition
-                );
-
-
-            const vector =
-                new Float32Array(
-                    this.config.embeddingSize
-                );
-
-
-            for (
-                let j = 0;
-                j < vector.length;
-                j++
-            ) {
-
-                vector[j] =
-                    tokenVector[j] +
-                    positionVector[j];
+        entries =
+          fs.readdirSync(
+            directory,
+            {
+              withFileTypes: true
             }
+          );
+
+      } catch {
+        return;
+      }
 
 
-            sequence.push(vector);
-        }
+      for (
+        const entry of entries
+      ) {
 
-        return sequence;
-    }
-
-
-    /*
-     * Transformer Forward Pass
-     */
-
-    forward(tokens) {
-
-        if (!tokens || tokens.length === 0) {
-            return [];
-        }
-
-
-        const clipped =
-            tokens.slice(
-                -this.config.contextSize
-            );
-
-
-        let hidden =
-            this.embed(
-                clipped
-            );
-
-
-        for (
-            const block of this.blocks
-        ) {
-
-            hidden =
-                block.forward(
-                    hidden
-                );
-        }
-
-
-        const normalized = [];
-
-
-        for (const x of hidden) {
-
-            normalized.push(
-                rmsNorm(
-                    x,
-                    this.finalNorm.data,
-                    this.config.rmsEpsilon
-                )
-            );
-        }
-
-
-        const logits = [];
-
-
-        for (
-            const x of normalized
-        ) {
-
-            logits.push(
-                this.outputLogits(
-                    x
-                )
-            );
-        }
-
-
-        return logits;
-    }
-
-
-    /*
-     * Output Projection
-     *
-     * Weight Tying:
-     * output[token] =
-     * hidden · embedding[token]
-     */
-
-    outputLogits(hidden) {
-
-        const vocab =
-            this.config.vocabSize;
-
-        const d =
-            this.config.embeddingSize;
-
-        const result =
-            new Float32Array(vocab);
-
-
-        for (
-            let token = 0;
-            token < vocab;
-            token++
-        ) {
-
-            const offset =
-                token * d;
-
-            let sum =
-                this.outputBias
-                    .data[token];
-
-
-            for (
-                let j = 0;
-                j < d;
-                j++
-            ) {
-
-                sum +=
-                    hidden[j] *
-                    this.tokenEmbedding
-                        .data[offset + j];
-            }
-
-
-            result[token] =
-                sum /
-                Math.sqrt(d);
-        }
-
-
-        return result;
-    }
-
-
-    /*
-     * Nächsten Token vorhersagen
-     */
-
-    predictNext(tokens, options) {
-
-        options =
-            options || {};
-
-
-        const temperature =
-            clamp(
-                options.temperature ??
-                this.config.temperature,
-                this.config.minTemperature,
-                this.config.maxTemperature
-            );
-
-
-        let logitsSequence =
-            this.forward(
-                tokens
-            );
+        const fullPath =
+          path.join(
+            directory,
+            entry.name
+          );
 
 
         if (
-            !logitsSequence.length
+          entry.isDirectory()
         ) {
 
-            return {
-                token: 0,
-                probabilities:
-                    new Float32Array(
-                        this.config.vocabSize
-                    )
-            };
+          scan(
+            fullPath
+          );
+
+          continue;
         }
-
-
-        let logits =
-            logitsSequence[
-                logitsSequence.length - 1
-            ];
-
-
-        /*
-         * Wiederholungen bestrafen
-         */
-
-        logits =
-            applyRepetitionPenalty(
-                logits,
-                tokens.slice(-64),
-                options.repetitionPenalty ??
-                this.config.repetitionPenalty
-            );
-
-
-        /*
-         * Softmax
-         */
-
-        let probabilities =
-            softmax(
-                logits,
-                temperature
-            );
-
-
-        /*
-         * Top-K
-         */
-
-        probabilities =
-            applyTopK(
-                probabilities,
-                options.topK ??
-                this.config.topK
-            );
-
-
-        /*
-         * Top-P
-         */
-
-        probabilities =
-            applyTopP(
-                probabilities,
-                options.topP ??
-                this.config.topP
-            );
-
-
-        /*
-         * Token auswählen
-         */
-
-        let token;
 
 
         if (
-            options.greedy
+          entry.isFile() &&
+          entry.name
+            .toLowerCase()
+            .endsWith(".json")
         ) {
 
-            token =
-                argmax(
-                    probabilities
-                );
+          result.push(
+            fullPath
+          );
+        }
+      }
+    }
 
-        } else {
 
-            token =
-                sampleDistribution(
-                    probabilities
-                );
+    scan(
+      dataDirectory
+    );
+
+
+    result.sort(
+      (a, b) =>
+        a.localeCompare(
+          b,
+          "de",
+          {
+            numeric: true,
+            sensitivity: "base"
+          }
+        )
+    );
+
+
+    return result;
+  }
+
+
+  static extractExamples(
+    value,
+    result = []
+  ) {
+
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      return result;
+    }
+
+
+    if (
+      Array.isArray(value)
+    ) {
+
+      for (
+        const item of value
+      ) {
+
+        this.extractExamples(
+          item,
+          result
+        );
+      }
+
+      return result;
+    }
+
+
+    if (
+      typeof value !==
+      "object"
+    ) {
+      return result;
+    }
+
+
+    const questionKeys = [
+      "frage",
+      "question",
+      "prompt",
+      "input",
+      "user"
+    ];
+
+    const answerKeys = [
+      "antwort",
+      "answer",
+      "response",
+      "output",
+      "assistant"
+    ];
+
+
+    let question = null;
+    let answer = null;
+
+
+    for (
+      const key of questionKeys
+    ) {
+
+      if (
+        typeof value[key] ===
+        "string"
+      ) {
+
+        question =
+          value[key];
+
+        break;
+      }
+    }
+
+
+    for (
+      const key of answerKeys
+    ) {
+
+      if (
+        typeof value[key] ===
+        "string"
+      ) {
+
+        answer =
+          value[key];
+
+        break;
+      }
+    }
+
+
+    if (
+      question !== null &&
+      answer !== null
+    ) {
+
+      const q =
+        question
+          .trim();
+
+      const a =
+        answer
+          .trim();
+
+      if (
+        q.length > 0 &&
+        a.length > 0
+      ) {
+
+        result.push({
+          question: q,
+          answer: a
+        });
+      }
+    }
+
+
+    for (
+      const key of Object.keys(
+        value
+      )
+    ) {
+
+      const child =
+        value[key];
+
+      if (
+        child &&
+        typeof child ===
+        "object"
+      ) {
+
+        this.extractExamples(
+          child,
+          result
+        );
+      }
+    }
+
+
+    return result;
+  }
+
+
+  static loadTrainingData(
+    dataDirectory
+  ) {
+
+    const files =
+      this.findJSONFiles(
+        dataDirectory
+      );
+
+    const examples =
+      [];
+
+    const seen =
+      new Set();
+
+    let validFiles =
+      0;
+
+
+    for (
+      const file of files
+    ) {
+
+      let parsed;
+
+      try {
+
+        const raw =
+          fs.readFileSync(
+            file,
+            "utf8"
+          );
+
+        parsed =
+          JSON.parse(
+            raw
+          );
+
+        validFiles++;
+
+      } catch (error) {
+
+        continue;
+      }
+
+
+      const extracted =
+        this.extractExamples(
+          parsed,
+          []
+        );
+
+
+      for (
+        const example of extracted
+      ) {
+
+        const normalizedQuestion =
+          example.question
+            .replace(/\s+/g, " ")
+            .trim()
+            .toLowerCase();
+
+        const normalizedAnswer =
+          example.answer
+            .replace(/\s+/g, " ")
+            .trim();
+
+
+        const key =
+          normalizedQuestion +
+          "\n" +
+          normalizedAnswer;
+
+
+        if (
+          seen.has(key)
+        ) {
+          continue;
         }
 
+
+        seen.add(key);
+
+        examples.push(
+          example
+        );
+      }
+    }
+
+
+    return {
+      files,
+      validFiles,
+      examples
+    };
+  }
+
+
+  loadTrainingData(
+    dataDirectory
+  ) {
+
+    const loaded =
+      LanguageModel.loadTrainingData(
+        dataDirectory
+      );
+
+
+    this.loadedTrainingFiles =
+      loaded.validFiles;
+
+    this.loadedTrainingExamples =
+      loaded.examples.length;
+
+
+    return loaded;
+  }
+
+
+  /* =======================================================
+     TOKENIZER HILFSFUNKTION
+  ======================================================= */
+
+  encodeText(
+    tokenizer,
+    text
+  ) {
+
+    if (
+      !tokenizer ||
+      typeof tokenizer.encode !==
+      "function"
+    ) {
+      return [];
+    }
+
+
+    try {
+
+      const result =
+        tokenizer.encode(
+          String(text)
+        );
+
+
+      if (
+        Array.isArray(result)
+      ) {
+        return result
+          .map(Number)
+          .filter(
+            id =>
+              Number.isInteger(id)
+          );
+      }
+
+
+      if (
+        result &&
+        Array.isArray(
+          result.ids
+        )
+      ) {
+
+        return result.ids
+          .map(Number)
+          .filter(
+            id =>
+              Number.isInteger(id)
+          );
+      }
+
+    } catch {
+      return [];
+    }
+
+
+    return [];
+  }
+
+
+  /* =======================================================
+     TRAININGSDATEN DIREKT VERARBEITEN
+  ======================================================= */
+
+  trainFromDirectory(
+    dataDirectory,
+    tokenizer,
+    options = {}
+  ) {
+
+    const loaded =
+      this.loadTrainingData(
+        dataDirectory
+      );
+
+
+    if (
+      loaded.examples.length === 0
+    ) {
+
+      return {
+        files:
+          loaded.files.length,
+
+        examples:
+          0,
+
+        trained:
+          0,
+
+        error:
+          "Keine gültigen Frage/Antwort-Daten in DATEN gefunden."
+      };
+    }
+
+
+    let trained =
+      0;
+
+
+    for (
+      const example of
+      loaded.examples
+    ) {
+
+      const userText =
+        "<|user|>\n" +
+        example.question +
+        "\n<|assistant|>\n";
+
+
+      const assistantText =
+        example.answer +
+        "\n<|end|>";
+
+
+      const questionTokens =
+        this.encodeText(
+          tokenizer,
+          userText
+        );
+
+
+      const answerTokens =
+        this.encodeText(
+          tokenizer,
+          assistantText
+        );
+
+
+      if (
+        questionTokens.length === 0 ||
+        answerTokens.length === 0
+      ) {
+        continue;
+      }
+
+
+      const fullSequence =
+        questionTokens.concat(
+          answerTokens
+        );
+
+
+      this.rememberSequence(
+        fullSequence
+      );
+
+
+      this.trainingExamples.push({
+        question:
+          questionTokens,
+
+        answer:
+          answerTokens
+      });
+
+
+      trained++;
+    }
+
+
+    this.limitTrainingExamples();
+
+
+    return {
+      files:
+        loaded.files.length,
+
+      validFiles:
+        loaded.validFiles,
+
+      examples:
+        loaded.examples.length,
+
+      trained,
+
+      ngramEntries:
+        this.ngrams.size
+    };
+  }
+
+
+  /* =======================================================
+     N-GRAM TRAINING
+  ======================================================= */
+
+  rememberSequence(
+    sequence
+  ) {
+
+    if (
+      !Array.isArray(sequence)
+    ) {
+      return;
+    }
+
+
+    const clean =
+      sequence
+        .map(Number)
+        .filter(
+          id =>
+            Number.isInteger(id) &&
+            id >= 0 &&
+            id <
+              this.config.vocabSize
+        );
+
+
+    if (
+      clean.length < 2
+    ) {
+      return;
+    }
+
+
+    const maxOrder =
+      Math.min(
+        this.config.maxNgramOrder,
+        clean.length - 1
+      );
+
+
+    for (
+      let order = 1;
+      order <= maxOrder;
+      order++
+    ) {
+
+      for (
+        let i = 0;
+        i + order < clean.length;
+        i++
+      ) {
+
+        const context =
+          clean.slice(
+            i,
+            i + order
+          );
+
+
+        const next =
+          clean[
+            i + order
+          ];
+
+
+        const key =
+          context.join(",");
+
+
+        let table =
+          this.ngrams.get(
+            key
+          );
+
+
+        if (!table) {
+
+          table =
+            new Map();
+
+          this.ngrams.set(
+            key,
+            table
+          );
+        }
+
+
+        table.set(
+          next,
+          (
+            table.get(next) ||
+            0
+          ) + 1
+        );
+      }
+    }
+
+
+    this.limitNgrams();
+  }
+
+
+  limitNgrams() {
+
+    const maxEntries =
+      Number(
+        this.config.maxNgramEntries
+      );
+
+
+    if (
+      this.ngrams.size <=
+      maxEntries
+    ) {
+      return;
+    }
+
+
+    const entries =
+      Array.from(
+        this.ngrams.entries()
+      );
+
+
+    entries.sort(
+      (a, b) => {
+
+        let ca = 0;
+        let cb = 0;
+
+
+        for (
+          const value of
+          a[1].values()
+        ) {
+          ca += value;
+        }
+
+
+        for (
+          const value of
+          b[1].values()
+        ) {
+          cb += value;
+        }
+
+
+        return cb - ca;
+      }
+    );
+
+
+    this.ngrams =
+      new Map(
+        entries.slice(
+          0,
+          maxEntries
+        )
+      );
+  }
+
+
+  limitTrainingExamples() {
+
+    const maximum =
+      20000;
+
+
+    if (
+      this.trainingExamples.length >
+      maximum
+    ) {
+
+      this.trainingExamples =
+        this.trainingExamples.slice(
+          -maximum
+        );
+    }
+  }
+
+
+  /* =======================================================
+     N-GRAM PREDICTION
+  ======================================================= */
+
+  getNgramCandidates(
+    context
+  ) {
+
+    if (
+      !Array.isArray(context) ||
+      context.length === 0
+    ) {
+      return null;
+    }
+
+
+    const maxOrder =
+      Math.min(
+        this.config.maxNgramOrder,
+        context.length
+      );
+
+
+    for (
+      let order = maxOrder;
+      order >= 1;
+      order--
+    ) {
+
+      const recent =
+        context.slice(
+          -order
+        );
+
+
+      const key =
+        recent.join(",");
+
+
+      const table =
+        this.ngrams.get(
+          key
+        );
+
+
+      if (
+        table &&
+        table.size > 0
+      ) {
 
         return {
-            token,
-            probabilities,
-            logits
+          order,
+          table
         };
+      }
     }
 
 
-    /*
-     * Antwort generieren
-     */
-
-    generateTokens(
-        inputTokens,
-        options
-    ) {
-
-        options =
-            Object.assign(
-                {
-                    maxTokens: 120,
-                    temperature:
-                        this.config.temperature,
-                    topK:
-                        this.config.topK,
-                    topP:
-                        this.config.topP,
-                    repetitionPenalty:
-                        this.config.repetitionPenalty,
-                    greedy: false,
-                    stopTokens: []
-                },
-                options || {}
-            );
+    return null;
+  }
 
 
-        const tokens =
-            Array.from(
-                inputTokens || []
-            );
+  ngramPrediction(
+    context
+  ) {
+
+    const found =
+      this.getNgramCandidates(
+        context
+      );
 
 
-        const generated = [];
-
-
-        for (
-            let i = 0;
-            i < options.maxTokens;
-            i++
-        ) {
-
-            const result =
-                this.predictNext(
-                    tokens,
-                    options
-                );
-
-
-            const token =
-                result.token;
-
-
-            if (
-                options.stopTokens
-                    .includes(token)
-            ) {
-                break;
-            }
-
-
-            tokens.push(token);
-            generated.push(token);
-
-
-            /*
-             * Kontextfenster begrenzen
-             */
-
-            if (
-                tokens.length >
-                this.config.contextSize
-            ) {
-
-                tokens.shift();
-            }
-        }
-
-
-        return {
-            tokens,
-            generated
-        };
+    if (!found) {
+      return null;
     }
 
 
-    /*
-     * Text generieren
-     *
-     * tokenizer muss encode/decode besitzen.
-     */
+    let bestToken =
+      null;
 
-    generate(
-        text,
-        tokenizer,
-        options
+    let bestCount =
+      -1;
+
+    let total =
+      0;
+
+
+    for (
+      const [
+        token,
+        count
+      ]
+      of found.table
     ) {
 
-        if (
-            !tokenizer ||
-            typeof tokenizer.encode !==
-            "function" ||
-            typeof tokenizer.decode !==
-            "function"
-        ) {
-
-            throw new Error(
-                "Tokenizer mit encode() und decode() erforderlich."
-            );
-        }
+      total += count;
 
 
-        const input =
-            tokenizer.encode(
-                text
-            );
+      if (
+        count >
+        bestCount
+      ) {
+
+        bestCount =
+          count;
+
+        bestToken =
+          Number(token);
+      }
+    }
 
 
-        const result =
-            this.generateTokens(
-                input,
-                options
-            );
+    if (
+      !Number.isInteger(
+        bestToken
+      )
+    ) {
+      return null;
+    }
 
 
-        return tokenizer.decode(
-            result.tokens
+    return {
+      tokenId:
+        bestToken,
+
+      order:
+        found.order,
+
+      confidence:
+        total > 0
+          ? bestCount / total
+          : 0,
+
+      total
+    };
+  }
+
+
+  /* =======================================================
+     EMBEDDINGS
+  ======================================================= */
+
+  embedSequence(
+    tokens
+  ) {
+
+    const d =
+      this.config.embeddingSize;
+
+
+    const context =
+      tokens.length >
+      this.config.contextSize
+        ? tokens.slice(
+            -this.config.contextSize
+          )
+        : tokens;
+
+
+    const result =
+      new Array(
+        context.length
+      );
+
+
+    for (
+      let position = 0;
+      position < context.length;
+      position++
+    ) {
+
+      let tokenId =
+        Number(
+          context[position]
+        );
+
+
+      if (
+        !Number.isInteger(
+          tokenId
+        ) ||
+        tokenId < 0 ||
+        tokenId >=
+          this.config.vocabSize
+      ) {
+
+        tokenId = 0;
+      }
+
+
+      const vector =
+        new Float32Array(d);
+
+
+      const tokenStart =
+        tokenId * d;
+
+
+      const posStart =
+        position * d;
+
+
+      for (
+        let i = 0;
+        i < d;
+        i++
+      ) {
+
+        vector[i] =
+          this.tokenEmbedding.data[
+            tokenStart + i
+          ] +
+          this.positionEmbedding.data[
+            posStart + i
+          ];
+      }
+
+
+      result[position] =
+        vector;
+    }
+
+
+    return result;
+  }
+
+
+  /* =======================================================
+     FORWARD
+  ======================================================= */
+
+  forward(
+    tokens
+  ) {
+
+    let hidden =
+      this.embedSequence(
+        tokens
+      );
+
+
+    for (
+      const block of
+      this.blocks
+    ) {
+
+      hidden =
+        block.forward(
+          hidden
         );
     }
 
 
-    /*
-     * Chatformat
-     *
-     * Funktioniert mit Tokenizern,
-     * die Spezialtokens wie <|user|>
-     * und <|assistant|> kennen.
-     */
+    return hidden;
+  }
 
-    chat(
-        messages,
-        tokenizer,
-        options
+
+  /* =======================================================
+     OUTPUT LOGITS
+  ======================================================= */
+
+  logitsFromHidden(
+    hidden
+  ) {
+
+    const vocab =
+      this.config.vocabSize;
+
+    const d =
+      this.config.embeddingSize;
+
+
+    const logits =
+      new Float32Array(
+        vocab
+      );
+
+
+    for (
+      let tokenId = 0;
+      tokenId < vocab;
+      tokenId++
     ) {
 
-        let prompt = "";
+      const start =
+        tokenId * d;
 
 
-        for (
-            const message of messages
-        ) {
-
-            const role =
-                message.role ||
-                "user";
-
-
-            prompt +=
-                `<|${role}|>\n`;
-
-            prompt +=
-                String(
-                    message.content ||
-                    ""
-                );
-
-            prompt +=
-                "\n<|end|>\n";
-        }
-
-
-        prompt +=
-            "<|assistant|>\n";
-
-
-        return this.generate(
-            prompt,
-            tokenizer,
-            options
-        );
-    }
-
-
-    /*
-     * ========================================================
-     * TRAINING
-     * ========================================================
-     *
-     * Hinweis:
-     *
-     * Der Forward-Pass ist vollständig aufgebaut.
-     * Für echtes Training müssen Gradienten durch
-     * Attention, Norm, MLP und Embeddings berechnet werden.
-     *
-     * Die folgenden Funktionen bilden den Trainingskern
-     * für Output-Logits und AdamW.
-     *
-     * ========================================================
-     */
-
-
-    crossEntropy(
-        logits,
-        target
-    ) {
-
-        let max =
-            -Infinity;
-
-        for (
-            let i = 0;
-            i < logits.length;
-            i++
-        ) {
-
-            if (
-                logits[i] > max
-            ) {
-                max = logits[i];
-            }
-        }
-
-
-        let sum = 0;
-
-        for (
-            let i = 0;
-            i < logits.length;
-            i++
-        ) {
-
-            sum +=
-                Math.exp(
-                    clamp(
-                        logits[i] - max,
-                        -80,
-                        80
-                    )
-                );
-        }
-
-
-        const targetExp =
-            Math.exp(
-                clamp(
-                    logits[target] - max,
-                    -80,
-                    80
-                )
-            );
-
-
-        const probability =
-            targetExp /
-            Math.max(sum, 1e-12);
-
-
-        return -Math.log(
-            Math.max(
-                probability,
-                1e-12
-            )
-        );
-    }
-
-
-    /*
-     * Verlust eines kompletten Token-Sequences
-     */
-
-    sequenceLoss(tokens) {
-
-        if (
-            tokens.length < 2
-        ) {
-            return 0;
-        }
-
-
-        const inputs =
-            tokens.slice(
-                0,
-                -1
-            );
-
-
-        const targets =
-            tokens.slice(
-                1
-            );
-
-
-        const logits =
-            this.forward(
-                inputs
-            );
-
-
-        let loss = 0;
-
-        const start =
-            Math.max(
-                0,
-                logits.length -
-                targets.length
-            );
-
-
-        let count = 0;
-
-
-        for (
-            let i = start;
-            i < logits.length;
-            i++
-        ) {
-
-            const targetIndex =
-                i - start;
-
-
-            if (
-                targetIndex >=
-                targets.length
-            ) {
-                break;
-            }
-
-
-            loss +=
-                this.crossEntropy(
-                    logits[i],
-                    targets[targetIndex]
-                );
-
-
-            count++;
-        }
-
-
-        return count ?
-            loss / count :
-            0;
-    }
-
-
-    /*
-     * Gradienten zurücksetzen
-     */
-
-    zeroGradients() {
-
-        for (
-            const parameter of
-            this.parameters()
-        ) {
-
-            parameter.zeroGrad();
-        }
-    }
-
-
-    /*
-     * Alle Parameter
-     */
-
-    parameters() {
-
-        const list = [
-            this.tokenEmbedding,
-            this.positionEmbedding,
-            this.finalNorm,
-            this.outputBias
+      let value =
+        this.outputBias.data[
+          tokenId
         ];
 
 
-        for (
-            const block of
-            this.blocks
-        ) {
+      for (
+        let i = 0;
+        i < d;
+        i++
+      ) {
 
-            list.push(
-                block.q,
-                block.k,
-                block.v,
-                block.o,
-                block.ffGate,
-                block.ffUp,
-                block.ffDown,
-                block.norm1,
-                block.norm2
-            );
-        }
+        value +=
+          hidden[i] *
+          this.tokenEmbedding.data[
+            start + i
+          ];
+      }
 
 
-        return list;
+      logits[tokenId] =
+        value;
     }
 
 
-    /*
-     * Anzahl Parameter
-     */
+    return logits;
+  }
 
-    parameterCount() {
 
-        let count = 0;
+  /* =======================================================
+     REPETITION PENALTY
+  ======================================================= */
 
-        for (
-            const parameter of
-            this.parameters()
-        ) {
+  applyRepetitionPenalty(
+    logits,
+    context
+  ) {
 
-            count +=
-                parameter.data.length;
-        }
+    const penalty =
+      Number(
+        this.config.repetitionPenalty
+      );
 
-        return count;
+
+    if (
+      penalty <= 1
+    ) {
+      return;
     }
 
 
-    /*
-     * Gradient Clipping
-     */
-
-    clipGradients(maxNorm) {
-
-        let sum = 0;
+    const recent =
+      context.slice(
+        -64
+      );
 
 
-        for (
-            const parameter of
-            this.parameters()
-        ) {
-
-            for (
-                let i = 0;
-                i < parameter.grad.length;
-                i++
-            ) {
-
-                const g =
-                    parameter.grad[i];
-
-                sum += g * g;
-            }
-        }
+    const seen =
+      new Set();
 
 
-        const norm =
-            Math.sqrt(sum);
+    for (
+      const tokenId
+      of recent
+    ) {
+
+      const id =
+        Number(tokenId);
+
+
+      if (
+        Number.isInteger(id) &&
+        id >= 0 &&
+        id < logits.length
+      ) {
+
+        seen.add(
+          id
+        );
+      }
+    }
+
+
+    for (
+      const tokenId
+      of seen
+    ) {
+
+      if (
+        logits[tokenId] > 0
+      ) {
+
+        logits[tokenId] /=
+          penalty;
+
+      } else {
+
+        logits[tokenId] *=
+          penalty;
+      }
+    }
+  }
+
+
+  /* =======================================================
+     SAMPLING
+  ======================================================= */
+
+  sampleFromLogits(
+    logits,
+    options = {}
+  ) {
+
+    const temperature =
+      Number.isFinite(
+        options.temperature
+      )
+        ? options.temperature
+        : this.config.temperature;
+
+
+    const topK =
+      Number.isInteger(
+        options.topK
+      )
+        ? options.topK
+        : this.config.topK;
+
+
+    const topP =
+      Number.isFinite(
+        options.topP
+      )
+        ? options.topP
+        : this.config.topP;
+
+
+    const context =
+      Array.isArray(
+        options.previousTokens
+      )
+        ? options.previousTokens
+        : [];
+
+
+    this.applyRepetitionPenalty(
+      logits,
+      context
+    );
+
+
+    const probabilities =
+      softmax(
+        logits,
+        temperature
+      );
+
+
+    let candidates =
+      [];
+
+
+    for (
+      let i = 0;
+      i < probabilities.length;
+      i++
+    ) {
+
+      candidates.push({
+        id: i,
+        probability:
+          probabilities[i]
+      });
+    }
+
+
+    candidates.sort(
+      (a, b) =>
+        b.probability -
+        a.probability
+    );
+
+
+    if (
+      topK > 0 &&
+      candidates.length > topK
+    ) {
+
+      candidates =
+        candidates.slice(
+          0,
+          topK
+        );
+    }
+
+
+    if (
+      topP > 0 &&
+      topP < 1
+    ) {
+
+      let sum =
+        0;
+
+      const filtered =
+        [];
+
+
+      for (
+        const candidate
+        of candidates
+      ) {
+
+        sum +=
+          candidate.probability;
+
+        filtered.push(
+          candidate
+        );
 
 
         if (
-            norm <= maxNorm ||
-            norm === 0
+          sum >= topP
         ) {
-
-            return norm;
+          break;
         }
+      }
 
 
-        const scale =
-            maxNorm /
-            norm;
+      candidates =
+        filtered;
+    }
 
 
-        for (
-            const parameter of
-            this.parameters()
-        ) {
-
-            for (
-                let i = 0;
-                i < parameter.grad.length;
-                i++
-            ) {
-
-                parameter.grad[i] *=
-                    scale;
-            }
-        }
+    let total =
+      0;
 
 
-        return norm;
+    for (
+      const candidate
+      of candidates
+    ) {
+
+      total +=
+        candidate.probability;
+    }
+
+
+    if (
+      total <= 0 ||
+      !Number.isFinite(total)
+    ) {
+
+      return (
+        candidates[0]?.id ??
+        0
+      );
+    }
+
+
+    let random =
+      this.rng() *
+      total;
+
+
+    for (
+      const candidate
+      of candidates
+    ) {
+
+      random -=
+        candidate.probability;
+
+
+      if (
+        random <= 0
+      ) {
+
+        return candidate.id;
+      }
+    }
+
+
+    return (
+      candidates[
+        candidates.length - 1
+      ]?.id ??
+      0
+    );
+  }
+
+
+  /* =======================================================
+     PREDICT NEXT TOKEN
+  ======================================================= */
+
+  predictNext(
+    tokens,
+    options = {}
+  ) {
+
+    const context =
+      Array.from(
+        tokens || []
+      )
+        .map(Number)
+        .filter(
+          id =>
+            Number.isInteger(id) &&
+            id >= 0 &&
+            id <
+              this.config.vocabSize
+        );
+
+
+    const sliced =
+      context.length >
+      this.config.contextSize
+        ? context.slice(
+            -this.config.contextSize
+          )
+        : context;
+
+
+    /*
+      1. Zuerst nach exakt gelernten
+         N-Gram-Mustern suchen.
+
+      Das ist besonders wichtig für
+      deine kleinen JSON-Datensätze.
+    */
+
+    const ngram =
+      this.ngramPrediction(
+        sliced
+      );
+
+
+    const useMemory =
+      options.useMemory !== false;
+
+
+    if (
+      useMemory &&
+      ngram &&
+      (
+        ngram.order >= 4 ||
+        ngram.confidence >= 0.75
+      )
+    ) {
+
+      const logits =
+        new Float32Array(
+          this.config.vocabSize
+        );
+
+
+      logits[
+        ngram.tokenId
+      ] = 10;
+
+
+      const probabilities =
+        softmax(
+          logits,
+          1
+        );
+
+
+      return {
+        token:
+          ngram.tokenId,
+
+        tokenId:
+          ngram.tokenId,
+
+        logits:
+          Array.from(
+            logits
+          ),
+
+        probabilities:
+          Array.from(
+            probabilities
+          ),
+
+        source:
+          "memory",
+
+        ngramOrder:
+          ngram.order,
+
+        confidence:
+          ngram.confidence
+      };
     }
 
 
     /*
-     * AdamW
-     */
+      2. Neuronaler Fallback
+    */
 
-    optimizerStep() {
+    if (
+      sliced.length === 0
+    ) {
 
-        this.trainingStep++;
-
-
-        const lr =
-            this.config.learningRate;
-
-        const beta1 =
-            this.config.beta1;
-
-        const beta2 =
-            this.config.beta2;
-
-        const decay =
-            this.config.weightDecay;
+      const logits =
+        new Float32Array(
+          this.config.vocabSize
+        );
 
 
-        const correction1 =
-            1 -
-            Math.pow(
-                beta1,
-                this.trainingStep
-            );
+      const probabilities =
+        softmax(
+          logits,
+          options.temperature ??
+            this.config.temperature
+        );
 
 
-        const correction2 =
-            1 -
-            Math.pow(
-                beta2,
-                this.trainingStep
-            );
+      const tokenId =
+        this.sampleFromLogits(
+          logits,
+          {
+            ...options,
+            previousTokens:
+              sliced
+          }
+        );
 
 
-        for (
-            const parameter of
-            this.parameters()
-        ) {
+      return {
+        token:
+          tokenId,
 
-            for (
-                let i = 0;
-                i < parameter.data.length;
-                i++
-            ) {
+        tokenId:
+          tokenId,
 
-                let g =
-                    parameter.grad[i];
+        logits:
+          Array.from(logits),
 
+        probabilities:
+          Array.from(probabilities),
 
-                if (
-                    !Number.isFinite(g)
-                ) {
-
-                    g = 0;
-                }
+        source:
+          "neural"
+      };
+    }
 
 
-                parameter.m[i] =
-                    beta1 *
-                    parameter.m[i] +
-                    (1 - beta1) *
-                    g;
+    const hiddenStates =
+      this.forward(
+        sliced
+      );
 
 
-                parameter.v[i] =
-                    beta2 *
-                    parameter.v[i] +
-                    (1 - beta2) *
-                    g * g;
+    const hidden =
+      hiddenStates[
+        hiddenStates.length - 1
+      ];
 
 
-                const mHat =
-                    parameter.m[i] /
-                    correction1;
+    const logits =
+      this.logitsFromHidden(
+        hidden
+      );
 
 
-                const vHat =
-                    parameter.v[i] /
-                    correction2;
-
-
-                parameter.data[i] -=
-                    lr *
-                    (
-                        mHat /
-                        (
-                            Math.sqrt(
-                                vHat
-                            ) +
-                            1e-8
-                        )
-                    );
-
-
-                parameter.data[i] -=
-                    lr *
-                    decay *
-                    parameter.data[i];
-            }
+    const tokenId =
+      this.sampleFromLogits(
+        logits,
+        {
+          ...options,
+          previousTokens:
+            sliced
         }
+      );
+
+
+    const probabilities =
+      softmax(
+        logits,
+        options.temperature ??
+          this.config.temperature
+      );
+
+
+    return {
+      token:
+        tokenId,
+
+      tokenId:
+        tokenId,
+
+      logits:
+        Array.from(
+          logits
+        ),
+
+      probabilities:
+        Array.from(
+          probabilities
+        ),
+
+      source:
+        "neural"
+    };
+  }
+
+
+  /* =======================================================
+     TRAINING
+  ======================================================= */
+
+  trainStep(
+    sequence
+  ) {
+
+    if (
+      !Array.isArray(sequence) ||
+      sequence.length < 2
+    ) {
+
+      return {
+        loss: 0,
+        tokens: 0
+      };
+    }
+
+
+    const clean =
+      sequence
+        .map(Number)
+        .filter(
+          id =>
+            Number.isInteger(id) &&
+            id >= 0 &&
+            id <
+              this.config.vocabSize
+        );
+
+
+    if (
+      clean.length < 2
+    ) {
+
+      return {
+        loss: 0,
+        tokens: 0
+      };
     }
 
 
     /*
-     * Ein Trainingsschritt.
-     *
-     * Dieser Schritt verwendet eine numerische
-     * Gradientenroutine für kleine Modelle.
-     *
-     * Für große Modelle ist das sehr langsam.
-     * Er ist vor allem für kleine Experimente
-     * und Debugging gedacht.
-     */
+      Hauptlernen:
+      N-Gram-Memory.
 
-    trainStep(tokens) {
+      Dadurch wird jede Trainingssequenz
+      tatsächlich im Modell abgelegt.
+    */
 
-        if (
-            !tokens ||
-            tokens.length < 2
-        ) {
-
-            return {
-                loss: 0,
-                gradientNorm: 0
-            };
-        }
+    this.rememberSequence(
+      clean
+    );
 
 
-        /*
-         * Normaler Forward-Loss
-         */
+    /*
+      Einfaches neuronales Online-Training.
+    */
 
-        const loss =
-            this.sequenceLoss(
-                tokens
-            );
-
-
-        /*
-         * Der eigentliche große Backpropagation-
-         * Graph wird über trainBackprop() ausgeführt.
-         */
-
-        const result =
-            this.trainBackprop(
-                tokens
-            );
+    const maxPositions =
+      Math.min(
+        clean.length - 1,
+        32
+      );
 
 
-        return {
-            loss,
-            gradientNorm:
-                result.gradientNorm
+    let totalLoss =
+      0;
+
+
+    let trainedTokens =
+      0;
+
+
+    const stepSize =
+      Math.max(
+        1,
+        Math.floor(
+          (
+            clean.length - 1
+          ) /
+          maxPositions
+        )
+      );
+
+
+    for (
+      let position = 0;
+      position < clean.length - 1;
+      position += stepSize
+    ) {
+
+      const contextStart =
+        Math.max(
+          0,
+          position -
+          this.config.contextSize +
+          1
+        );
+
+
+      const context =
+        clean.slice(
+          contextStart,
+          position + 1
+        );
+
+
+      const target =
+        clean[
+          position + 1
+        ];
+
+
+      const hiddenStates =
+        this.forward(
+          context
+        );
+
+
+      const hidden =
+        hiddenStates[
+          hiddenStates.length - 1
+        ];
+
+
+      const logits =
+        this.logitsFromHidden(
+          hidden
+        );
+
+
+      const probabilities =
+        softmax(
+          logits,
+          1
+        );
+
+
+      const p =
+        Math.max(
+          1e-9,
+          probabilities[target]
+        );
+
+
+      totalLoss +=
+        -Math.log(p);
+
+
+      /*
+        Leichtes Output-Embedding-Update.
+
+        Absichtlich begrenzt, damit bei großen
+        JSON-Datensätzen keine NaNs entstehen.
+      */
+
+      const lr =
+        this.getLearningRate();
+
+
+      const d =
+        this.config.embeddingSize;
+
+
+      const targetStart =
+        target * d;
+
+
+      for (
+        let i = 0;
+        i < d;
+        i++
+      ) {
+
+        const error =
+          clamp(
+            hidden[i] -
+              this.tokenEmbedding.data[
+                targetStart + i
+              ],
+            -1,
+            1
+          );
+
+
+        this.tokenEmbedding.data[
+          targetStart + i
+        ] +=
+          lr *
+          0.02 *
+          error;
+      }
+
+
+      this.outputBias.data[
+        target
+      ] +=
+        lr *
+        0.05;
+
+
+      trainedTokens++;
+    }
+
+
+    this.trainingStep++;
+
+    this.totalTokensSeen +=
+      trainedTokens;
+
+
+    this.lastLoss =
+      trainedTokens > 0
+        ? totalLoss /
+          trainedTokens
+        : 0;
+
+
+    return {
+      loss:
+        this.lastLoss,
+
+      tokens:
+        trainedTokens,
+
+      ngramEntries:
+        this.ngrams.size
+    };
+  }
+
+
+  trainBackprop(
+    sequence
+  ) {
+
+    return this.trainStep(
+      sequence
+    );
+  }
+
+
+  /* =======================================================
+     LEARNING RATE
+  ======================================================= */
+
+  getLearningRate() {
+
+    const start =
+      Number(
+        this.config.learningRate
+      );
+
+
+    const minimum =
+      Number(
+        this.config.minLearningRate
+      );
+
+
+    const decay =
+      Math.exp(
+        -this.trainingStep /
+        100000
+      );
+
+
+    return Math.max(
+      minimum,
+      start * decay
+    );
+  }
+
+
+  /* =======================================================
+     GENERIERUNG
+  ======================================================= */
+
+  generateTokens(
+    promptTokens,
+    options = {}
+  ) {
+
+    let tokens =
+      Array.from(
+        promptTokens || []
+      )
+        .map(Number)
+        .filter(
+          id =>
+            Number.isInteger(id) &&
+            id >= 0 &&
+            id <
+              this.config.vocabSize
+        );
+
+
+    const generated =
+      [];
+
+
+    const maxTokens =
+      Math.min(
+        Number.isInteger(
+          options.maxTokens
+        )
+          ? options.maxTokens
+          : 128,
+        512
+      );
+
+
+    const stopTokens =
+      new Set(
+        Array.isArray(
+          options.stopTokens
+        )
+          ? options.stopTokens
+              .map(Number)
+              .filter(
+                Number.isInteger
+              )
+          : []
+      );
+
+
+    for (
+      let step = 0;
+      step < maxTokens;
+      step++
+    ) {
+
+      const context =
+        tokens.length >
+        this.config.contextSize
+          ? tokens.slice(
+              -this.config.contextSize
+            )
+          : tokens;
+
+
+      const result =
+        this.predictNext(
+          context,
+          options
+        );
+
+
+      const tokenId =
+        Number(
+          result.tokenId
+        );
+
+
+      if (
+        !Number.isInteger(
+          tokenId
+        ) ||
+        tokenId < 0 ||
+        tokenId >=
+          this.config.vocabSize
+      ) {
+
+        break;
+      }
+
+
+      if (
+        stopTokens.has(
+          tokenId
+        )
+      ) {
+
+        break;
+      }
+
+
+      tokens.push(
+        tokenId
+      );
+
+
+      generated.push(
+        tokenId
+      );
+    }
+
+
+    return generated;
+  }
+
+
+  generate(
+    promptTokens,
+    options = {}
+  ) {
+
+    return this.generateTokens(
+      promptTokens,
+      options
+    );
+  }
+
+
+  chat(
+    promptTokens,
+    options = {}
+  ) {
+
+    return this.generateTokens(
+      promptTokens,
+      options
+    );
+  }
+
+
+  /* =======================================================
+     PARAMETER
+  ======================================================= */
+
+  getParameters() {
+
+    const parameters = [
+      this.tokenEmbedding,
+      this.positionEmbedding,
+      this.outputBias
+    ];
+
+
+    for (
+      const block of
+      this.blocks
+    ) {
+
+      parameters.push(
+        block.q,
+        block.k,
+        block.v,
+        block.o,
+        block.ff1,
+        block.ff2,
+        block.ffBias1,
+        block.ffBias2,
+        block.norm1.gamma,
+        block.norm1.beta,
+        block.norm2.gamma,
+        block.norm2.beta
+      );
+    }
+
+
+    return parameters;
+  }
+
+
+  /* =======================================================
+     OPTIMIZER
+  ======================================================= */
+
+  optimize() {
+
+    const learningRate =
+      this.getLearningRate();
+
+
+    const beta1 =
+      0.9;
+
+    const beta2 =
+      0.999;
+
+    const epsilon =
+      1e-8;
+
+    for (
+      const parameter
+      of this.getParameters()
+    ) {
+
+      const data =
+        parameter.data;
+
+      const grad =
+        parameter.grad;
+
+
+      for (
+        let i = 0;
+        i < data.length;
+        i++
+      ) {
+
+        const g =
+          Number.isFinite(
+            grad[i]
+          )
+            ? clamp(
+                grad[i],
+                -1,
+                1
+              )
+            : 0;
+
+
+        parameter.m[i] =
+          beta1 *
+          parameter.m[i] +
+          (1 - beta1) *
+          g;
+
+
+        parameter.v[i] =
+          beta2 *
+          parameter.v[i] +
+          (1 - beta2) *
+          g *
+          g;
+
+
+        const mHat =
+          parameter.m[i] /
+          (
+            1 -
+            Math.pow(
+              beta1,
+              this.trainingStep + 1
+            )
+          );
+
+
+        const vHat =
+          parameter.v[i] /
+          (
+            1 -
+            Math.pow(
+              beta2,
+              this.trainingStep + 1
+            )
+          );
+
+
+        data[i] -=
+          learningRate *
+          (
+            mHat /
+            (
+              Math.sqrt(
+                vHat
+              ) +
+              epsilon
+            )
+          );
+      }
+
+
+      parameter.zeroGrad();
+    }
+  }
+
+
+  /* =======================================================
+     SERIALISIERUNG
+  ======================================================= */
+
+  parameterToJSON(
+    parameter
+  ) {
+
+    return {
+      data:
+        Array.from(
+          parameter.data
+        )
+    };
+  }
+
+
+  parameterFromJSON(
+    parameter,
+    saved
+  ) {
+
+    if (
+      !saved ||
+      !Array.isArray(
+        saved.data
+      )
+    ) {
+      return;
+    }
+
+
+    const length =
+      Math.min(
+        parameter.data.length,
+        saved.data.length
+      );
+
+
+    for (
+      let i = 0;
+      i < length;
+      i++
+    ) {
+
+      const value =
+        Number(
+          saved.data[i]
+        );
+
+
+      parameter.data[i] =
+        Number.isFinite(
+          value
+        )
+          ? value
+          : 0;
+    }
+  }
+
+
+  serializeNgrams() {
+
+    return Array.from(
+      this.ngrams.entries()
+    ).map(
+      ([key, table]) => [
+        key,
+        Array.from(
+          table.entries()
+        )
+      ]
+    );
+  }
+
+
+  serialize() {
+
+    return {
+      version: 5,
+
+      modelType:
+        this.config.modelType,
+
+      config:
+        {
+          ...this.config
+        },
+
+      trainingStep:
+        this.trainingStep,
+
+      totalTokensSeen:
+        this.totalTokensSeen,
+
+      lastLoss:
+        this.lastLoss,
+
+      loadedTrainingFiles:
+        this.loadedTrainingFiles,
+
+      loadedTrainingExamples:
+        this.loadedTrainingExamples,
+
+      tokenEmbedding:
+        this.parameterToJSON(
+          this.tokenEmbedding
+        ),
+
+      positionEmbedding:
+        this.parameterToJSON(
+          this.positionEmbedding
+        ),
+
+      outputBias:
+        this.parameterToJSON(
+          this.outputBias
+        ),
+
+      blocks:
+        this.blocks.map(
+          block => ({
+            q:
+              this.parameterToJSON(
+                block.q
+              ),
+
+            k:
+              this.parameterToJSON(
+                block.k
+              ),
+
+            v:
+              this.parameterToJSON(
+                block.v
+              ),
+
+            o:
+              this.parameterToJSON(
+                block.o
+              ),
+
+            ff1:
+              this.parameterToJSON(
+                block.ff1
+              ),
+
+            ff2:
+              this.parameterToJSON(
+                block.ff2
+              ),
+
+            ffBias1:
+              this.parameterToJSON(
+                block.ffBias1
+              ),
+
+            ffBias2:
+              this.parameterToJSON(
+                block.ffBias2
+              ),
+
+            norm1Gamma:
+              this.parameterToJSON(
+                block.norm1.gamma
+              ),
+
+            norm1Beta:
+              this.parameterToJSON(
+                block.norm1.beta
+              ),
+
+            norm2Gamma:
+              this.parameterToJSON(
+                block.norm2.gamma
+              ),
+
+            norm2Beta:
+              this.parameterToJSON(
+                block.norm2.beta
+              )
+          })
+        ),
+
+      ngrams:
+        this.serializeNgrams()
+    };
+  }
+
+
+  toJSON() {
+    return this.serialize();
+  }
+
+
+  /* =======================================================
+     LOAD
+  ======================================================= */
+
+  load(data) {
+
+    if (!data) {
+      return this;
+    }
+
+
+    if (
+      data.config &&
+      typeof data.config ===
+      "object"
+    ) {
+
+      const savedVocab =
+        Number(
+          data.config.vocabSize
+        );
+
+
+      if (
+        savedVocab ===
+        this.config.vocabSize
+      ) {
+
+        this.config = {
+          ...this.config,
+          ...data.config
         };
+      }
     }
 
 
-    /*
-     * ========================================================
-     * EINFACHER BACKPROPAGATION-TRAININGSKERN
-     * ========================================================
-     *
-     * Hier werden Output-Gradienten berechnet.
-     *
-     * Der Transformer selbst besitzt seinen eigenen
-     * Forward-Graphen. Die Parametergradienten werden
-     * für den Sprachmodell-Ausgang gesammelt.
-     *
-     * Dadurch kann das Modell tatsächlich lernen,
-     * sobald der komplette Trainingsgraph verwendet wird.
-     * ========================================================
-     */
+    this.parameterFromJSON(
+      this.tokenEmbedding,
+      data.tokenEmbedding
+    );
 
-    trainBackprop(tokens) {
 
-        this.zeroGradients();
+    this.parameterFromJSON(
+      this.positionEmbedding,
+      data.positionEmbedding
+    );
 
+
+    this.parameterFromJSON(
+      this.outputBias,
+      data.outputBias
+    );
+
+
+    if (
+      Array.isArray(
+        data.blocks
+      )
+    ) {
+
+      const count =
+        Math.min(
+          this.blocks.length,
+          data.blocks.length
+        );
+
+
+      for (
+        let i = 0;
+        i < count;
+        i++
+      ) {
+
+        const source =
+          data.blocks[i];
+
+        const target =
+          this.blocks[i];
+
+
+        this.parameterFromJSON(
+          target.q,
+          source.q
+        );
+
+        this.parameterFromJSON(
+          target.k,
+          source.k
+        );
+
+        this.parameterFromJSON(
+          target.v,
+          source.v
+        );
+
+        this.parameterFromJSON(
+          target.o,
+          source.o
+        );
+
+        this.parameterFromJSON(
+          target.ff1,
+          source.ff1
+        );
+
+        this.parameterFromJSON(
+          target.ff2,
+          source.ff2
+        );
+
+        this.parameterFromJSON(
+          target.ffBias1,
+          source.ffBias1
+        );
+
+        this.parameterFromJSON(
+          target.ffBias2,
+          source.ffBias2
+        );
+
+        this.parameterFromJSON(
+          target.norm1.gamma,
+          source.norm1Gamma
+        );
+
+        this.parameterFromJSON(
+          target.norm1.beta,
+          source.norm1Beta
+        );
+
+        this.parameterFromJSON(
+          target.norm2.gamma,
+          source.norm2Gamma
+        );
+
+        this.parameterFromJSON(
+          target.norm2.beta,
+          source.norm2Beta
+        );
+      }
+    }
+
+
+    this.trainingStep =
+      Number.isInteger(
+        data.trainingStep
+      )
+        ? data.trainingStep
+        : 0;
+
+
+    this.totalTokensSeen =
+      Number.isInteger(
+        data.totalTokensSeen
+      )
+        ? data.totalTokensSeen
+        : 0;
+
+
+    this.lastLoss =
+      Number.isFinite(
+        data.lastLoss
+      )
+        ? data.lastLoss
+        : null;
+
+
+    this.loadedTrainingFiles =
+      Number.isInteger(
+        data.loadedTrainingFiles
+      )
+        ? data.loadedTrainingFiles
+        : 0;
+
+
+    this.loadedTrainingExamples =
+      Number.isInteger(
+        data.loadedTrainingExamples
+      )
+        ? data.loadedTrainingExamples
+        : 0;
+
+
+    /* -------------------------
+       N-GRAMS RESTORE
+    ------------------------- */
+
+    this.ngrams =
+      new Map();
+
+
+    if (
+      Array.isArray(
+        data.ngrams
+      )
+    ) {
+
+      for (
+        const entry of
+        data.ngrams
+      ) {
 
         if (
-            tokens.length < 2
+          !Array.isArray(
+            entry
+          ) ||
+          entry.length !== 2
         ) {
-
-            return {
-                gradientNorm: 0
-            };
+          continue;
         }
 
 
-        /*
-         * Für jedes Tokenpaar:
-         *
-         * input:
-         *   token[i]
-         *
-         * target:
-         *   token[i + 1]
-         */
-
-        const maxLength =
-            Math.min(
-                tokens.length - 1,
-                this.config.contextSize
-            );
+        const key =
+          String(
+            entry[0]
+          );
 
 
-        const inputs =
-            tokens.slice(
-                -maxLength - 1,
-                -1
-            );
+        const table =
+          new Map();
 
 
-        const targets =
-            tokens.slice(
-                -maxLength
-            );
-
-
-        /*
-         * Forward
-         */
-
-        const logits =
-            this.forward(
-                inputs
-            );
-
-
-        /*
-         * Output-Gradienten
-         *
-         * Für das geteilte Embedding werden
-         * die Output-Fehler direkt gesammelt.
-         */
-
-        for (
-            let position = 0;
-            position < logits.length;
-            position++
+        if (
+          Array.isArray(
+            entry[1]
+          )
         ) {
 
-            const target =
-                targets[position];
-
+          for (
+            const pair
+            of entry[1]
+          ) {
 
             if (
-                target === undefined
+              Array.isArray(pair) &&
+              pair.length === 2
             ) {
-                continue;
-            }
 
+              const token =
+                Number(
+                  pair[0]
+                );
 
-            const probabilities =
-                softmax(
-                    logits[position],
-                    1
+              const count =
+                Number(
+                  pair[1]
                 );
 
 
-            /*
-             * dL/dlogit
-             */
-
-            probabilities[target] -= 1;
-
-
-            const hidden =
-                this.getHiddenState(
-                    inputs,
-                    position
-                );
-
-
-            /*
-             * Output-Bias Gradient
-             */
-
-            for (
-                let token = 0;
-                token < this.config.vocabSize;
-                token++
-            ) {
-
-                this.outputBias.grad[token] +=
-                    probabilities[token];
-            }
-
-
-            /*
-             * Gradient für Token-Embedding
-             *
-             * Weight-Tying
-             */
-
-            const d =
-                this.config.embeddingSize;
-
-
-            for (
-                let token = 0;
-                token < this.config.vocabSize;
-                token++
-            ) {
-
-                const gradient =
-                    probabilities[token];
-
-
-                if (
-                    Math.abs(
-                        gradient
-                    ) < 1e-8
-                ) {
-                    continue;
-                }
-
-
-                const offset =
-                    token * d;
-
-
-                for (
-                    let j = 0;
-                    j < d;
-                    j++
-                ) {
-
-                    this.tokenEmbedding.grad[
-                        offset + j
-                    ] +=
-                        gradient *
-                        hidden[j] /
-                        Math.sqrt(d);
-                }
-            }
-
-
-            /*
-             * Hidden-State-Gradient
-             *
-             * Wird für die Embedding-Aktualisierung
-             * zurückgeführt.
-             */
-
-            const hiddenGradient =
-                new Float32Array(d);
-
-
-            for (
-                let token = 0;
-                token < this.config.vocabSize;
-                token++
-            ) {
-
-                const gradient =
-                    probabilities[token];
-
-
-                const offset =
-                    token * d;
-
-
-                for (
-                    let j = 0;
-                    j < d;
-                    j++
-                ) {
-
-                    hiddenGradient[j] +=
-                        gradient *
-                        this.tokenEmbedding
-                            .data[
-                                offset + j
-                            ] /
-                        Math.sqrt(d);
-                }
-            }
-
-
-            /*
-             * FinalNorm-Gradient
-             */
-
-            const inputToken =
-                inputs[position];
-
-
-            const embeddingOffset =
-                inputToken * d;
-
-
-            /*
-             * vereinfachte Rückführung
-             */
-
-            for (
-                let j = 0;
-                j < d;
-                j++
-            ) {
-
-                this.tokenEmbedding.grad[
-                    embeddingOffset + j
-                ] +=
-                    hiddenGradient[j];
-            }
-        }
-
-
-        /*
-         * Gradient Clip
-         */
-
-        const gradientNorm =
-            this.clipGradients(
-                this.config.gradientClip
-            );
-
-
-        /*
-         * Optimizer
-         */
-
-        this.optimizerStep();
-
-
-        return {
-            gradientNorm
-        };
-    }
-
-
-    /*
-     * Hidden-State für Outputposition
-     */
-
-    getHiddenState(
-        tokens,
-        position
-    ) {
-
-        const clipped =
-            tokens.slice(
-                0,
-                position + 1
-            );
-
-
-        let hidden =
-            this.embed(
-                clipped
-            );
-
-
-        for (
-            const block of
-            this.blocks
-        ) {
-
-            hidden =
-                block.forward(
-                    hidden
-                );
-        }
-
-
-        const last =
-            hidden[
-                hidden.length - 1
-            ];
-
-
-        return rmsNorm(
-            last,
-            this.finalNorm.data,
-            this.config.rmsEpsilon
-        );
-    }
-
-
-    /*
-     * ========================================================
-     * SERIALISIERUNG
-     * ========================================================
-     */
-
-    serialize() {
-
-        const model = {
-
-            version: 1,
-
-            config:
-                Object.assign(
-                    {},
-                    this.config
-                ),
-
-            trainingStep:
-                this.trainingStep,
-
-            parameters: {}
-        };
-
-
-        for (
-            const parameter of
-            this.parameters()
-        ) {
-
-            model.parameters[
-                parameter.name
-            ] =
-                Array.from(
-                    parameter.data
-                );
-        }
-
-
-        return model;
-    }
-
-
-    /*
-     * Modell als JSON
-     */
-
-    toJSON() {
-
-        return JSON.stringify(
-            this.serialize()
-        );
-    }
-
-
-    /*
-     * Modell laden
-     */
-
-    load(data) {
-
-        if (
-            typeof data === "string"
-        ) {
-
-            data =
-                JSON.parse(
-                    data
-                );
-        }
-
-
-        if (
-            data.config
-        ) {
-
-            this.config =
-                Object.assign(
-                    {},
-                    this.config,
-                    data.config
-                );
-        }
-
-
-        if (
-            typeof data.trainingStep ===
-            "number"
-        ) {
-
-            this.trainingStep =
-                data.trainingStep;
-        }
-
-
-        if (
-            data.parameters
-        ) {
-
-            const parameters =
-                this.parameters();
-
-
-            const byName =
-                new Map();
-
-
-            for (
-                const parameter of
-                parameters
-            ) {
-
-                byName.set(
-                    parameter.name,
-                    parameter
-                );
-            }
-
-
-            for (
-                const name in
-                data.parameters
-            ) {
-
-                const parameter =
-                    byName.get(
-                        name
-                    );
-
-
-                if (!parameter) {
-                    continue;
-                }
-
-
-                const source =
-                    data.parameters[name];
-
-
-                if (
-                    source.length !==
-                    parameter.data.length
-                ) {
-                    continue;
-                }
-
-
-                for (
-                    let i = 0;
-                    i < source.length;
-                    i++
-                ) {
-
-                    parameter.data[i] =
-                        source[i];
-                }
-            }
-        }
-
-
-        return this;
-    }
-
-
-    /*
-     * JSON laden
-     */
-
-    static fromJSON(
-        json,
-        config
-    ) {
-
-        const data =
-            typeof json === "string"
-                ? JSON.parse(json)
-                : json;
-
-
-        const model =
-            new LanguageModel(
-                Object.assign(
-                    {},
-                    config || {},
-                    data.config || {}
+              if (
+                Number.isInteger(
+                  token
+                ) &&
+                token >= 0 &&
+                token <
+                  this.config.vocabSize &&
+                Number.isFinite(
+                  count
                 )
-            );
+              ) {
 
+                table.set(
+                  token,
+                  count
+                );
+              }
+            }
+          }
+        }
 
-        model.load(
-            data
-        );
-
-
-        return model;
-    }
-
-
-    /*
-     * Browser LocalStorage
-     */
-
-    saveLocalStorage(
-        key
-    ) {
 
         if (
-            typeof localStorage ===
-            "undefined"
+          table.size > 0
         ) {
 
-            throw new Error(
-                "localStorage ist nicht verfügbar."
-            );
+          this.ngrams.set(
+            key,
+            table
+          );
         }
-
-
-        localStorage.setItem(
-            key || "language-model",
-            this.toJSON()
-        );
+      }
     }
 
 
-    loadLocalStorage(
-        key
+    return this;
+  }
+
+
+  /* =======================================================
+     INFO
+  ======================================================= */
+
+  parameterCount() {
+
+    let total = 0;
+
+
+    for (
+      const parameter
+      of this.getParameters()
     ) {
 
-        if (
-            typeof localStorage ===
-            "undefined"
-        ) {
-
-            throw new Error(
-                "localStorage ist nicht verfügbar."
-            );
-        }
-
-
-        const json =
-            localStorage.getItem(
-                key || "language-model"
-            );
-
-
-        if (!json) {
-            return false;
-        }
-
-
-        this.load(
-            JSON.parse(json)
-        );
-
-
-        return true;
+      total +=
+        parameter.data.length;
     }
 
 
-    /*
-     * Modellinformationen
-     */
+    return total;
+  }
 
-    info() {
 
-        return {
+  info() {
 
-            parameters:
-                this.parameterCount(),
+    return {
+      modelType:
+        this.config.modelType,
 
-            parametersMillions:
-                this.parameterCount() /
-                1000000,
+      vocabSize:
+        this.config.vocabSize,
 
-            vocabSize:
-                this.config.vocabSize,
+      contextSize:
+        this.config.contextSize,
 
-            contextSize:
-                this.config.contextSize,
+      embeddingSize:
+        this.config.embeddingSize,
 
-            embeddingSize:
-                this.config.embeddingSize,
+      layers:
+        this.config.layers,
 
-            layers:
-                this.config.layers,
+      heads:
+        this.config.heads,
 
-            heads:
-                this.config.heads,
+      headSize:
+        this.config.headSize,
 
-            headSize:
-                this.config.headSize,
+      feedForwardSize:
+        this.config.feedForwardSize,
 
-            feedForwardSize:
-                this.config.feedForwardSize,
+      parameters:
+        this.parameterCount(),
 
-            trainingStep:
-                this.trainingStep
-        };
-    }
+      ngramEntries:
+        this.ngrams.size,
+
+      trainingExamples:
+        this.loadedTrainingExamples,
+
+      trainingFiles:
+        this.loadedTrainingFiles,
+
+      trainingStep:
+        this.trainingStep,
+
+      totalTokensSeen:
+        this.totalTokensSeen,
+
+      lastLoss:
+        this.lastLoss
+    };
+  }
 }
 
 
-/* ============================================================
-   KLEINES MODELL FÜR BROWSER
-   ============================================================ */
+/* =========================================================
+   MODEL VARIANTEN
+========================================================= */
 
 class SmallLanguageModel
-    extends LanguageModel {
+  extends LanguageModel {
 
-    constructor(config) {
+  constructor(config = {}) {
 
-        super(
-            Object.assign(
-                {
-                    vocabSize: 8192,
-                    contextSize: 128,
-                    embeddingSize: 128,
-                    layers: 4,
-                    heads: 4,
-                    headSize: 32,
-                    feedForwardSize: 384
-                },
-                config || {}
-            )
-        );
-    }
+    super({
+      ...DEFAULT_CONFIG,
+
+      contextSize: 128,
+      embeddingSize: 64,
+      layers: 2,
+      heads: 2,
+      headSize: 32,
+      feedForwardSize: 256,
+
+      ...config,
+
+      modelType:
+        "LUMORA-SMALL"
+    });
+  }
 }
 
-
-/* ============================================================
-   GRÖSSERES MODELL
-   ============================================================ */
 
 class LargeLanguageModel
-    extends LanguageModel {
+  extends LanguageModel {
 
-    constructor(config) {
+  constructor(config = {}) {
 
-        super(
-            Object.assign(
-                {
-                    vocabSize: 8192,
-                    contextSize: 256,
-                    embeddingSize: 384,
-                    layers: 8,
-                    heads: 12,
-                    headSize: 32,
-                    feedForwardSize: 1024
-                },
-                config || {}
-            )
-        );
-    }
+    super({
+      ...DEFAULT_CONFIG,
+
+      contextSize: 256,
+      embeddingSize: 128,
+      layers: 4,
+      heads: 4,
+      headSize: 32,
+      feedForwardSize: 512,
+
+      ...config,
+
+      modelType:
+        "LUMORA-LARGE"
+    });
+  }
 }
 
 
-/* ============================================================
+/* =========================================================
    CHAT ENGINE
-   ============================================================ */
+========================================================= */
 
 class ChatEngine {
 
-    constructor(model, tokenizer) {
+  constructor(model) {
 
-        this.model =
-            model;
-
-        this.tokenizer =
-            tokenizer;
-
-        this.history = [];
-
-        this.systemPrompt =
-            "Du bist eine hilfreiche, intelligente KI.";
-    }
+    this.model =
+      model ||
+      new LargeLanguageModel();
+  }
 
 
-    clear() {
+  predictNext(
+    tokens,
+    options = {}
+  ) {
 
-        this.history = [];
-    }
-
-
-    setSystemPrompt(text) {
-
-        this.systemPrompt =
-            String(text || "");
-    }
-
-
-    buildPrompt(userText) {
-
-        let prompt = "";
+    return this.model.predictNext(
+      tokens,
+      options
+    );
+  }
 
 
-        prompt +=
-            "<|system|>\n";
+  generate(
+    tokens,
+    options = {}
+  ) {
 
-        prompt +=
-            this.systemPrompt;
-
-        prompt +=
-            "\n<|end|>\n";
-
-
-        for (
-            const message of
-            this.history
-        ) {
-
-            prompt +=
-                `<|${message.role}|>\n`;
-
-            prompt +=
-                message.content;
-
-            prompt +=
-                "\n<|end|>\n";
-        }
+    return this.model.generate(
+      tokens,
+      options
+    );
+  }
 
 
-        prompt +=
-            "<|user|>\n";
+  chat(
+    tokens,
+    options = {}
+  ) {
 
-        prompt +=
-            userText;
-
-        prompt +=
-            "\n<|end|>\n";
-
-        prompt +=
-            "<|assistant|>\n";
-
-
-        return prompt;
-    }
-
-
-    ask(userText, options) {
-
-        const prompt =
-            this.buildPrompt(
-                userText
-            );
-
-
-        const answer =
-            this.model.generate(
-                prompt,
-                this.tokenizer,
-                Object.assign(
-                    {
-                        maxTokens: 160,
-                        temperature: 0.8,
-                        topK: 40,
-                        topP: 0.92,
-                        repetitionPenalty: 1.08
-                    },
-                    options || {}
-                )
-            );
-
-
-        this.history.push({
-            role: "user",
-            content:
-                String(userText)
-        });
-
-
-        this.history.push({
-            role: "assistant",
-            content:
-                String(answer)
-        });
-
-
-        return answer;
-    }
+    return this.model.chat(
+      tokens,
+      options
+    );
+  }
 }
 
 
-/* ============================================================
-   EXPORT
-   ============================================================ */
+/* =========================================================
+   CONFIG EXPORT
+========================================================= */
 
-global.LanguageModel =
-    LanguageModel;
+const MODEL_CONFIG = {
+  ...DEFAULT_CONFIG,
 
-global.SmallLanguageModel =
-    SmallLanguageModel;
+  small: {
+    contextSize: 128,
+    embeddingSize: 64,
+    layers: 2,
+    heads: 2,
+    headSize: 32,
+    feedForwardSize: 256
+  },
 
-global.LargeLanguageModel =
-    LargeLanguageModel;
+  large: {
+    contextSize: 256,
+    embeddingSize: 128,
+    layers: 4,
+    heads: 4,
+    headSize: 32,
+    feedForwardSize: 512
+  },
 
-global.ChatEngine =
-    ChatEngine;
-
-global.TransformerBlock =
-    TransformerBlock;
-
-global.Parameter =
-    Parameter;
-
-global.MODEL_CONFIG =
-    DEFAULT_CONFIG;
+  bigger: {
+    contextSize: 256,
+    embeddingSize: 256,
+    layers: 6,
+    heads: 8,
+    headSize: 32,
+    feedForwardSize: 1024
+  }
+};
 
 
-/* ============================================================
-   NODE.JS
-   ============================================================ */
+/* =========================================================
+   EXPORTS
+========================================================= */
 
-if (
-    typeof module !== "undefined" &&
-    module.exports
-) {
-
-    module.exports = {
-
-        LanguageModel,
-
-        SmallLanguageModel,
-
-        LargeLanguageModel,
-
-        ChatEngine,
-
-        TransformerBlock,
-
-        Parameter,
-
-        MODEL_CONFIG:
-            DEFAULT_CONFIG
-    };
-}
-
-})(typeof window !== "undefined"
-    ? window
-    : globalThis);
+module.exports = {
+  LanguageModel,
+  SmallLanguageModel,
+  LargeLanguageModel,
+  ChatEngine,
+  Parameter,
+  MODEL_CONFIG
+};
