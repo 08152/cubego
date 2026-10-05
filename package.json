@@ -1,19 +1,10 @@
 {
-  "name": "orangeshop",
+  "name": "lumora",
   "version": "1.0.0",
-  "description": "OrangeShop",
+  "description": "LUMORA – eigenes lokales KI-Sprachmodell",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
-  },
-  "keywords": [
-    "shop",
-    "orangeshop"
-  ],
-  "author": "Ghostface",
-  "license": "MIT",
-  "dependencies": {
-    "express": "^4.21.2"
   },
   "engines": {
     "node": ">=20"
