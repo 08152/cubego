@@ -4,8 +4,8 @@ const fs = require("fs");
 const path = require("path");
 const { parentPort, workerData } = require("worker_threads");
 
-const ROOT = workerData.root;
-const GELERNT = workerData.gelernt;
+const ROOT = workerData.root || __dirname;
+const GELERNT = workerData.gelernt || path.join(ROOT, "GELERNT");
 
 const MODEL_FILE = path.join(GELERNT, "model.json");
 const TOKENIZER_FILE = path.join(GELERNT, "tokenizer.json");
@@ -15,12 +15,17 @@ let stopped = false;
 
 if (parentPort) {
     parentPort.on("message", message => {
-        if (message && message.type === "stop") {
+        if (
+            message &&
+            (
+                message.type === "stop" ||
+                message.action === "stop"
+            )
+        ) {
             stopped = true;
         }
     });
 }
-
 
 /* =========================================================
    HILFSFUNKTIONEN
@@ -41,32 +46,40 @@ function readJSON(file) {
     );
 }
 
+function sleep(ms) {
+    const buffer = new SharedArrayBuffer(4);
+    const array = new Int32Array(buffer);
+
+    Atomics.wait(
+        array,
+        0,
+        0,
+        ms
+    );
+}
 
 /* =========================================================
-   TOKENIZER-MODUL
+   TOKENIZER
    ========================================================= */
 
 function loadTokenizerModule() {
+    const file = path.join(
+        ROOT,
+        "tokenizer.js"
+    );
 
-    const tokenizerFile =
-        path.join(
-            ROOT,
-            "tokenizer.js"
-        );
-
-    if (!fs.existsSync(tokenizerFile)) {
+    if (!fs.existsSync(file)) {
         throw new Error(
             "tokenizer.js wurde nicht gefunden: " +
-            tokenizerFile
+            file
         );
     }
 
     delete require.cache[
-        require.resolve(tokenizerFile)
+        require.resolve(file)
     ];
 
-    const loaded =
-        require(tokenizerFile);
+    const loaded = require(file);
 
     if (!loaded) {
         throw new Error(
@@ -77,13 +90,7 @@ function loadTokenizerModule() {
     return loaded;
 }
 
-
-/* =========================================================
-   TOKENIZER FACTORY
-   ========================================================= */
-
 function getTokenizerFactory() {
-
     const loaded =
         loadTokenizerModule();
 
@@ -93,9 +100,7 @@ function getTokenizerFactory() {
         loaded;
 
     /*
-     * Aktuelle LUMORA-Version:
-     *
-     * AdvancedTokenizer.create()
+     * Aktuelle LUMORA-Tokenizer-Version
      */
 
     if (
@@ -107,9 +112,7 @@ function getTokenizerFactory() {
     }
 
     /*
-     * Fallback für ältere Versionen:
-     *
-     * class AdvancedTokenizer
+     * Fallback für Klassenexport
      */
 
     if (
@@ -129,13 +132,7 @@ function getTokenizerFactory() {
     );
 }
 
-
-/* =========================================================
-   TOKENIZER LADEN
-   ========================================================= */
-
 function loadTokenizer() {
-
     if (!fs.existsSync(TOKENIZER_FILE)) {
         throw new Error(
             "GELERNT/tokenizer.json wurde noch nicht erstellt. " +
@@ -143,7 +140,7 @@ function loadTokenizer() {
         );
     }
 
-    const AdvancedTokenizer =
+    const factory =
         getTokenizerFactory();
 
     const saved =
@@ -152,7 +149,7 @@ function loadTokenizer() {
         );
 
     let tokenizer =
-        AdvancedTokenizer.create();
+        factory.create();
 
     if (!tokenizer) {
         throw new Error(
@@ -160,74 +157,55 @@ function loadTokenizer() {
         );
     }
 
-    /*
-     * Aktuelle Engine
-     */
-
     if (
         typeof tokenizer.import ===
         "function"
     ) {
-
-        tokenizer.import(
-            saved
-        );
-
+        tokenizer.import(saved);
     }
-
-    /*
-     * Fallback
-     */
 
     else if (
         typeof tokenizer.fromJSON ===
         "function"
     ) {
-
         tokenizer =
             tokenizer.fromJSON(
                 saved
             );
-
     }
 
     else {
-
         throw new Error(
             "Tokenizer kann nicht importiert werden. " +
-            "Die Engine besitzt weder import() noch fromJSON()."
+            "Es fehlt import() bzw. fromJSON()."
         );
     }
 
     return tokenizer;
 }
 
-
 /* =========================================================
-   MODELL-MODUL
+   MODELL
    ========================================================= */
 
 function loadModelModule() {
+    const file = path.join(
+        ROOT,
+        "model.js"
+    );
 
-    const modelFile =
-        path.join(
-            ROOT,
-            "model.js"
-        );
-
-    if (!fs.existsSync(modelFile)) {
+    if (!fs.existsSync(file)) {
         throw new Error(
             "model.js wurde nicht gefunden: " +
-            modelFile
+            file
         );
     }
 
     delete require.cache[
-        require.resolve(modelFile)
+        require.resolve(file)
     ];
 
-    const loaded =
-        require(modelFile);
+    const loaded = require(file);
 
     if (!loaded) {
         throw new Error(
@@ -238,13 +216,7 @@ function loadModelModule() {
     return loaded;
 }
 
-
-/* =========================================================
-   MODELL LADEN
-   ========================================================= */
-
 function loadModel() {
-
     const modelModule =
         loadModelModule();
 
@@ -273,41 +245,31 @@ function loadModel() {
     let config = {};
 
     if (
-        fs.existsSync(
-            CONFIG_FILE
-        )
+        fs.existsSync(CONFIG_FILE)
     ) {
-
         try {
-
-            const savedConfig =
+            const saved =
                 readJSON(
                     CONFIG_FILE
                 );
 
             config =
-                savedConfig.model ||
-                savedConfig ||
+                saved.model ||
+                saved ||
                 {};
-
         } catch {
-
             config = {};
-
         }
     }
 
     let model;
 
     try {
-
         model =
             new Model(
                 config
             );
-
     } catch {
-
         model =
             new Model();
     }
@@ -321,26 +283,21 @@ function loadModel() {
         typeof model.load ===
         "function"
     ) {
-
         model.load(
             savedModel
         );
-
     }
 
     else if (
         typeof model.fromJSON ===
         "function"
     ) {
-
         model.fromJSON(
             savedModel
         );
-
     }
 
     else {
-
         throw new Error(
             "Das Modell kann nicht geladen werden. " +
             "Es fehlt load() bzw. fromJSON()."
@@ -349,7 +306,6 @@ function loadModel() {
 
     return model;
 }
-
 
 /* =========================================================
    PROMPT
@@ -360,7 +316,6 @@ function buildPrompt(
     history,
     systemPrompt
 ) {
-
     let result = "";
 
     result +=
@@ -368,20 +323,17 @@ function buildPrompt(
 
     result +=
         systemPrompt ||
-        "Du bist LUMORA, eine hilfreiche intelligente KI.";
+        "Du bist LUMORA, eine hilfreiche KI.";
 
     result +=
         "\n<|end|>\n";
 
-
     if (
         Array.isArray(history)
     ) {
-
         for (
             const message of history
         ) {
-
             if (
                 !message ||
                 message.content === undefined ||
@@ -414,7 +366,6 @@ function buildPrompt(
         }
     }
 
-
     result +=
         "<|user|>\n";
 
@@ -432,25 +383,23 @@ function buildPrompt(
     return result;
 }
 
-
 /* =========================================================
-   STOP-TOKEN
+   STOP TOKEN
    ========================================================= */
 
 function isStopToken(
     token,
     tokenizer
 ) {
-
     const stopStrings = [
         "<|end|>",
         "<|user|>",
         "<|system|>",
-        "<|tool|>"
+        "<|tool|>",
+        "<|assistant|>"
     ];
 
     try {
-
         const decoded =
             tokenizer.decode([
                 token
@@ -462,31 +411,315 @@ function isStopToken(
                     stop
                 )
         );
-
     } catch {
-
         return false;
-
     }
 }
 
+/* =========================================================
+   REPETITION PENALTY
+   ========================================================= */
+
+function applyRepetitionPenalty(
+    logits,
+    tokens,
+    penalty
+) {
+    if (
+        !Array.isArray(logits) ||
+        !Number.isFinite(penalty) ||
+        penalty <= 1
+    ) {
+        return logits;
+    }
+
+    const seen =
+        new Set(tokens);
+
+    const result =
+        logits.slice();
+
+    for (
+        const token of seen
+    ) {
+        if (
+            token < 0 ||
+            token >= result.length
+        ) {
+            continue;
+        }
+
+        const value =
+            Number(
+                result[token]
+            );
+
+        if (!Number.isFinite(value)) {
+            continue;
+        }
+
+        if (value > 0) {
+            result[token] =
+                value / penalty;
+        } else {
+            result[token] =
+                value * penalty;
+        }
+    }
+
+    return result;
+}
 
 /* =========================================================
-   LOGITS → TOKEN
+   LOGITS SAMPLING
+   ========================================================= */
+
+function sampleFromLogits(
+    logits,
+    tokens,
+    settings
+) {
+    if (
+        !Array.isArray(logits) ||
+        logits.length === 0
+    ) {
+        throw new Error(
+            "Keine Logits erhalten."
+        );
+    }
+
+    const temperature =
+        Math.max(
+            0.01,
+            Number(
+                settings.temperature
+            )
+        );
+
+    const penalty =
+        Math.max(
+            1,
+            Number(
+                settings.repetitionPenalty
+            )
+        );
+
+    const adjusted =
+        applyRepetitionPenalty(
+            logits,
+            tokens,
+            penalty
+        );
+
+    let max =
+        -Infinity;
+
+    const values =
+        new Array(
+            adjusted.length
+        );
+
+    for (
+        let i = 0;
+        i < adjusted.length;
+        i++
+    ) {
+        const raw =
+            Number(
+                adjusted[i]
+            );
+
+        if (!Number.isFinite(raw)) {
+            values[i] = -Infinity;
+            continue;
+        }
+
+        const value =
+            raw /
+            temperature;
+
+        values[i] =
+            Number.isFinite(value)
+                ? value
+                : -Infinity;
+
+        if (
+            values[i] >
+            max
+        ) {
+            max =
+                values[i];
+        }
+    }
+
+    if (!Number.isFinite(max)) {
+        throw new Error(
+            "Die Logits enthalten keine gültigen Werte."
+        );
+    }
+
+    const probabilities =
+        new Array(
+            values.length
+        );
+
+    let total = 0;
+
+    for (
+        let i = 0;
+        i < values.length;
+        i++
+    ) {
+        if (
+            values[i] ===
+            -Infinity
+        ) {
+            probabilities[i] = 0;
+            continue;
+        }
+
+        const p =
+            Math.exp(
+                values[i] -
+                max
+            );
+
+        probabilities[i] =
+            Number.isFinite(p)
+                ? p
+                : 0;
+
+        total +=
+            probabilities[i];
+    }
+
+    if (
+        !Number.isFinite(total) ||
+        total <= 0
+    ) {
+        return 0;
+    }
+
+    let candidates =
+        probabilities.map(
+            (probability, index) => ({
+                index,
+                probability
+            })
+        );
+
+    candidates =
+        candidates.filter(
+            item =>
+                item.probability > 0
+        );
+
+    candidates.sort(
+        (a, b) =>
+            b.probability -
+            a.probability
+    );
+
+    const topK =
+        Math.max(
+            1,
+            Math.min(
+                candidates.length,
+                Number(
+                    settings.topK
+                )
+            )
+        );
+
+    candidates =
+        candidates.slice(
+            0,
+            topK
+        );
+
+    const topP =
+        Math.max(
+            0.01,
+            Math.min(
+                1,
+                Number(
+                    settings.topP
+                )
+            )
+        );
+
+    let cumulative = 0;
+
+    const filtered = [];
+
+    for (
+        const candidate of
+        candidates
+    ) {
+        cumulative +=
+            candidate.probability /
+            total;
+
+        filtered.push(
+            candidate
+        );
+
+        if (
+            cumulative >=
+            topP
+        ) {
+            break;
+        }
+    }
+
+    let probabilitySum = 0;
+
+    for (
+        const item of
+        filtered
+    ) {
+        probabilitySum +=
+            item.probability;
+    }
+
+    let random =
+        Math.random() *
+        probabilitySum;
+
+    for (
+        const item of
+        filtered
+    ) {
+        random -=
+            item.probability;
+
+        if (
+            random <= 0
+        ) {
+            return item.index;
+        }
+    }
+
+    return filtered[
+        filtered.length - 1
+    ].index;
+}
+
+/* =========================================================
+   RESULT → TOKEN
    ========================================================= */
 
 function extractToken(
     result,
+    tokens,
     settings
 ) {
-
     if (
         typeof result ===
         "number"
     ) {
         return result;
     }
-
 
     if (
         result &&
@@ -496,7 +729,6 @@ function extractToken(
         return result.token;
     }
 
-
     if (
         result &&
         typeof result.tokenId ===
@@ -505,17 +737,13 @@ function extractToken(
         return result.tokenId;
     }
 
-
-    /*
-     * Falls predictNext() direkt
-     * Logits zurückgibt.
-     */
-
     let logits = null;
 
     if (
         result &&
-        Array.isArray(result.logits)
+        Array.isArray(
+            result.logits
+        )
     ) {
         logits =
             result.logits;
@@ -528,232 +756,35 @@ function extractToken(
             result;
     }
 
-
-    if (
-        logits &&
-        logits.length > 0
-    ) {
-
-        const temperature =
-            Math.max(
-                0.01,
-                Number(
-                    settings.temperature ||
-                    0.82
-                )
-            );
-
-        const values =
-            new Array(
-                logits.length
-            );
-
-        let max =
-            -Infinity;
-
-        for (
-            let i = 0;
-            i < logits.length;
-            i++
-        ) {
-
-            const value =
-                Number(
-                    logits[i]
-                ) /
-                temperature;
-
-            values[i] =
-                Number.isFinite(
-                    value
-                )
-                    ? value
-                    : -Infinity;
-
-            if (
-                values[i] >
-                max
-            ) {
-                max =
-                    values[i];
-            }
-        }
-
-
-        const probabilities =
-            new Array(
-                values.length
-            );
-
-        let sum = 0;
-
-        for (
-            let i = 0;
-            i < values.length;
-            i++
-        ) {
-
-            const p =
-                Math.exp(
-                    values[i] -
-                    max
-                );
-
-            probabilities[i] =
-                Number.isFinite(p)
-                    ? p
-                    : 0;
-
-            sum +=
-                probabilities[i];
-        }
-
-
-        if (
-            sum <= 0
-        ) {
-            return 0;
-        }
-
-
-        /*
-         * Top-K
-         */
-
-        let candidates =
-            probabilities.map(
-                (p, i) => ({
-                    index: i,
-                    probability: p
-                })
-            );
-
-        candidates.sort(
-            (a, b) =>
-                b.probability -
-                a.probability
+    if (logits) {
+        return sampleFromLogits(
+            logits,
+            tokens,
+            settings
         );
-
-
-        const topK =
-            Math.max(
-                1,
-                Math.min(
-                    candidates.length,
-                    Number(
-                        settings.topK ||
-                        40
-                    )
-                )
-            );
-
-        candidates =
-            candidates.slice(
-                0,
-                topK
-            );
-
-
-        /*
-         * Top-P
-         */
-
-        let sortedSum = 0;
-
-        const topP =
-            Math.min(
-                1,
-                Math.max(
-                    0.01,
-                    Number(
-                        settings.topP ||
-                        0.92
-                    )
-                )
-            );
-
-        const filtered = [];
-
-        for (
-            const candidate of
-            candidates
-        ) {
-
-            sortedSum +=
-                candidate.probability;
-
-            filtered.push(
-                candidate
-            );
-
-            if (
-                sortedSum /
-                sum >=
-                topP
-            ) {
-                break;
-            }
-        }
-
-
-        /*
-         * Sampling
-         */
-
-        let random =
-            Math.random() *
-            filtered.reduce(
-                (total, item) =>
-                    total +
-                    item.probability,
-                0
-            );
-
-        for (
-            const item of
-            filtered
-        ) {
-
-            random -=
-                item.probability;
-
-            if (
-                random <= 0
-            ) {
-                return item.index;
-            }
-        }
-
-        return filtered[
-            filtered.length - 1
-        ].index;
     }
 
-
     throw new Error(
-        "Das Modell hat kein gültiges Token oder Logits zurückgegeben."
+        "Das Modell hat weder ein Token noch Logits zurückgegeben."
     );
 }
 
-
 /* =========================================================
-   GENERIERUNG
+   GENERIEREN
    ========================================================= */
 
-function generate(
+async function generate(
     model,
     tokenizer,
     prompt,
     options
 ) {
-
     const settings = {
-
         maxTokens:
             Math.max(
                 1,
                 Number(
-                    options.maxTokens ||
+                    options.maxTokens ??
                     160
                 )
             ),
@@ -765,24 +796,35 @@ function generate(
             ),
 
         topK:
-            Number(
-                options.topK ??
-                40
+            Math.max(
+                1,
+                Number(
+                    options.topK ??
+                    40
+                )
             ),
 
         topP:
-            Number(
-                options.topP ??
-                0.92
+            Math.max(
+                0.01,
+                Math.min(
+                    1,
+                    Number(
+                        options.topP ??
+                        0.92
+                    )
+                )
             ),
 
         repetitionPenalty:
-            Number(
-                options.repetitionPenalty ??
-                1.08
+            Math.max(
+                1,
+                Number(
+                    options.repetitionPenalty ??
+                    1.08
+                )
             )
     };
-
 
     const formattedPrompt =
         buildPrompt(
@@ -791,23 +833,19 @@ function generate(
             options.systemPrompt
         );
 
-
     const inputTokens =
         tokenizer.encode(
             formattedPrompt
         );
 
-
     if (
         !Array.isArray(inputTokens) ||
         inputTokens.length === 0
     ) {
-
         throw new Error(
             "Der Prompt konnte nicht tokenisiert werden."
         );
     }
-
 
     let tokens =
         Array.from(
@@ -816,24 +854,20 @@ function generate(
 
     const generated = [];
 
-
     const contextSize =
         Number(
             model.config?.contextSize ||
             256
         );
 
-
     for (
         let step = 0;
         step < settings.maxTokens;
         step++
     ) {
-
         if (stopped) {
             break;
         }
-
 
         let context =
             tokens;
@@ -842,7 +876,6 @@ function generate(
             context.length >
             contextSize
         ) {
-
             context =
                 context.slice(
                     context.length -
@@ -850,50 +883,52 @@ function generate(
                 );
         }
 
-
         let result;
-
 
         if (
             typeof model.predictNext ===
             "function"
         ) {
-
             result =
-                model.predictNext(
+                await model.predictNext(
                     context,
                     settings
                 );
-
         }
 
         else if (
             typeof model.generateNext ===
             "function"
         ) {
-
             result =
-                model.generateNext(
+                await model.generateNext(
                     context,
                     settings
                 );
+        }
 
+        else if (
+            typeof model.forward ===
+            "function"
+        ) {
+            result =
+                await model.forward(
+                    context
+                );
         }
 
         else {
-
             throw new Error(
-                "Das Modell besitzt weder predictNext() noch generateNext()."
+                "Das Modell besitzt keine Methode für die nächste Token-Vorhersage."
             );
         }
-
 
         const nextToken =
             extractToken(
                 result,
+                tokens,
                 settings
             );
-
 
         if (
             !Number.isInteger(
@@ -901,15 +936,11 @@ function generate(
             ) ||
             nextToken < 0
         ) {
-
             throw new Error(
                 "Ungültige Token-ID: " +
-                String(
-                    nextToken
-                )
+                String(nextToken)
             );
         }
-
 
         if (
             isStopToken(
@@ -920,7 +951,6 @@ function generate(
             break;
         }
 
-
         tokens.push(
             nextToken
         );
@@ -929,22 +959,16 @@ function generate(
             nextToken
         );
 
-
         let partial = "";
 
         try {
-
             partial =
                 tokenizer.decode(
                     generated
                 );
-
         } catch {
-
             partial = "";
-
         }
-
 
         send(
             "token",
@@ -960,38 +984,32 @@ function generate(
             }
         );
 
-
-        /*
-         * Worker kurz freigeben.
-         */
-
         if (
-            step % 2 === 0
+            step % 2 ===
+            0
         ) {
-
-            awaitSleep(1);
-
+            await new Promise(
+                resolve =>
+                    setImmediate(
+                        resolve
+                    )
+            );
         }
     }
-
 
     let answer = "";
 
     try {
-
         answer =
             tokenizer.decode(
                 generated
             );
-
     } catch (error) {
-
         throw new Error(
             "Antwort konnte nicht dekodiert werden: " +
             error.message
         );
     }
-
 
     const stopStrings = [
         "<|end|>",
@@ -1001,12 +1019,10 @@ function generate(
         "<|assistant|>"
     ];
 
-
     for (
         const stop of
         stopStrings
     ) {
-
         const index =
             answer.indexOf(
                 stop
@@ -1015,7 +1031,6 @@ function generate(
         if (
             index !== -1
         ) {
-
             answer =
                 answer.substring(
                     0,
@@ -1024,9 +1039,7 @@ function generate(
         }
     }
 
-
     return {
-
         answer:
             answer.trim(),
 
@@ -1038,109 +1051,101 @@ function generate(
     };
 }
 
-
-/* =========================================================
-   KLEINES SLEEP
-   ========================================================= */
-
-function awaitSleep(ms) {
-
-    const buffer =
-        new SharedArrayBuffer(4);
-
-    const array =
-        new Int32Array(
-            buffer
-        );
-
-    Atomics.wait(
-        array,
-        0,
-        0,
-        ms
-    );
-}
-
-
 /* =========================================================
    START
    ========================================================= */
 
 async function main() {
-
     try {
+        send(
+            "status",
+            {
+                message:
+                    "LUMORA wird geladen..."
+            }
+        );
+
+        if (
+            !fs.existsSync(
+                TOKENIZER_FILE
+            )
+        ) {
+            throw new Error(
+                "GELERNT/tokenizer.json wurde nicht erstellt. " +
+                "Trainiere LUMORA zuerst."
+            );
+        }
+
+        if (
+            !fs.existsSync(
+                MODEL_FILE
+            )
+        ) {
+            throw new Error(
+                "GELERNT/model.json wurde nicht erstellt. " +
+                "Trainiere LUMORA zuerst."
+            );
+        }
 
         send(
             "status",
             {
                 message:
-                    "Tokenizer wird geladen."
+                    "Tokenizer wird geladen..."
             }
         );
-
 
         const tokenizer =
             loadTokenizer();
 
-
         if (stopped) {
-
             send(
-                "finished",
+                "complete",
                 {
-                    stopped:
-                        true
+                    answer: "",
+                    stopped: true
                 }
             );
-
             return;
         }
-
 
         send(
             "status",
             {
                 message:
-                    "Modell wird geladen."
+                    "Modell wird geladen..."
             }
         );
-
 
         const model =
             loadModel();
 
-
         if (stopped) {
-
             send(
-                "finished",
+                "complete",
                 {
-                    stopped:
-                        true
+                    answer: "",
+                    stopped: true
                 }
             );
-
             return;
         }
-
 
         send(
             "status",
             {
                 message:
-                    "KI ist bereit."
+                    "LUMORA ist bereit."
             }
         );
-
 
         const result =
             await generate(
                 model,
                 tokenizer,
-                workerData.prompt,
+                workerData.prompt || "",
                 workerData.options || {}
             );
-
 
         send(
             "complete",
@@ -1155,11 +1160,9 @@ async function main() {
                     result.promptTokens
             }
         );
-
     }
 
     catch (error) {
-
         send(
             "error",
             {
@@ -1172,6 +1175,5 @@ async function main() {
         );
     }
 }
-
 
 main();
