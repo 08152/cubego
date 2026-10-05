@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "updatedAt": "2026-10-05T13:38:30.470Z",
+  "model": {
+    "modelType": "LUMORA-LARGE",
+    "vocabSize": 74,
+    "contextSize": 32,
+    "embeddingSize": 32,
+    "layers": 1,
+    "heads": 1,
+    "headSize": 32,
+    "feedForwardSize": 64,
+    "maxNgramOrder": 8,
+    "maxNgramEntries": 100000,
+    "learningRate": 0.0003,
+    "minLearningRate": 0.00002,
+    "temperature": 0.75,
+    "topK": 40,
+    "topP": 0.92,
+    "repetitionPenalty": 1.08,
+    "seed": 1337
+  },
+  "training": {
+    "epochs": 1,
+    "sequenceLength": 32,
+    "learningRate": 0.0003,
+    "contextSize": 32
+  }
+}
