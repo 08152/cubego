@@ -3,1096 +3,1905 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { URL } = require("url");
+const https = require("https");
 const { Worker } = require("worker_threads");
-
-const PORT = Number(process.env.PORT || 10000);
-const HOST = "0.0.0.0";
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "DATEN");
 const LEARNED_DIR = path.join(ROOT, "GELERNT");
 
-const INDEX_FILE = path.join(ROOT, "index.html");
-const TRAIN_WORKER = path.join(ROOT, "train-worker.js");
-const GENERATE_WORKER = path.join(ROOT, "generate-worker.js");
-
 const MODEL_FILE = path.join(LEARNED_DIR, "model.json");
 const TOKENIZER_FILE = path.join(LEARNED_DIR, "tokenizer.json");
 const CONFIG_FILE = path.join(LEARNED_DIR, "config.json");
-const TRAINING_STATE_FILE = path.join(LEARNED_DIR, "training-state.json");
+const STATE_FILE = path.join(LEARNED_DIR, "training-state.json");
+
+const PORT = Number(process.env.PORT || 10000);
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const GITHUB_OWNER = process.env.GITHUB_OWNER || "08152";
 const GITHUB_REPO = process.env.GITHUB_REPO || "cubego";
 const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
 
+const TRAIN_WORKER = path.join(
+    ROOT,
+    "train-worker.js"
+);
+
+const GENERATE_WORKER = path.join(
+    ROOT,
+    "generate-worker.js"
+);
+
+fs.mkdirSync(DATA_DIR, {
+    recursive: true
+});
+
+fs.mkdirSync(LEARNED_DIR, {
+    recursive: true
+});
+
 let trainingWorker = null;
 let generateWorker = null;
 
 let trainingState = {
     running: false,
+    phase: "idle",
     progress: 0,
-    status: "Noch nicht trainiert",
+    epoch: 0,
+    step: 0,
+    loss: null,
+    totalEpochs: 0,
+    message: "Bereit."
+};
+
+let generationState = {
+    running: false,
+    text: "",
     error: null,
     startedAt: null,
     finishedAt: null
 };
 
-let generationState = {
-    running: false
-};
 
-function ensureDirectories() {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.mkdirSync(LEARNED_DIR, { recursive: true });
+/* =========================================================
+   HILFSFUNKTIONEN
+   ========================================================= */
+
+function json(res, status, data) {
+    const body = JSON.stringify(
+        data,
+        null,
+        2
+    );
+
+    res.writeHead(
+        status,
+        {
+            "Content-Type":
+                "application/json; charset=utf-8",
+
+            "Cache-Control":
+                "no-store",
+
+            "Access-Control-Allow-Origin":
+                "*",
+
+            "Access-Control-Allow-Headers":
+                "Content-Type",
+
+            "Access-Control-Allow-Methods":
+                "GET,POST,OPTIONS"
+        }
+    );
+
+    res.end(body);
 }
 
-ensureDirectories();
+function text(res, status, value) {
+    res.writeHead(
+        status,
+        {
+            "Content-Type":
+                "text/plain; charset=utf-8",
 
-function safeReadJSON(file, fallback = null) {
+            "Cache-Control":
+                "no-store",
+
+            "Access-Control-Allow-Origin":
+                "*"
+        }
+    );
+
+    res.end(value);
+}
+
+function sendError(
+    res,
+    status,
+    message,
+    error
+) {
+    json(
+        res,
+        status,
+        {
+            success: false,
+            error: message,
+            details:
+                error
+                    ? error.message
+                    : undefined
+        }
+    );
+}
+
+function readBody(req) {
+    return new Promise(
+        (resolve, reject) => {
+            let body = "";
+
+            req.on(
+                "data",
+                chunk => {
+                    body += chunk;
+
+                    if (
+                        body.length >
+                        10 * 1024 * 1024
+                    ) {
+                        reject(
+                            new Error(
+                                "Request zu groß."
+                            )
+                        );
+
+                        req.destroy();
+                    }
+                }
+            );
+
+            req.on(
+                "end",
+                () => {
+                    if (!body) {
+                        resolve({});
+                        return;
+                    }
+
+                    try {
+                        resolve(
+                            JSON.parse(
+                                body
+                            )
+                        );
+                    } catch {
+                        reject(
+                            new Error(
+                                "Ungültiges JSON."
+                            )
+                        );
+                    }
+                }
+            );
+
+            req.on(
+                "error",
+                reject
+            );
+        }
+    );
+}
+
+function fileExists(file) {
     try {
-        if (!fs.existsSync(file)) return fallback;
-        return JSON.parse(fs.readFileSync(file, "utf8"));
+        return fs.existsSync(file);
+    } catch {
+        return false;
+    }
+}
+
+function readJSON(file, fallback = null) {
+    try {
+        return JSON.parse(
+            fs.readFileSync(
+                file,
+                "utf8"
+            )
+        );
     } catch {
         return fallback;
     }
 }
 
-function listFilesRecursive(dir) {
-    if (!fs.existsSync(dir)) return [];
-
-    const result = [];
-
-    function walk(current) {
-        for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-            const full = path.join(current, entry.name);
-
-            if (entry.isDirectory()) {
-                walk(full);
-            } else {
-                result.push(path.relative(ROOT, full).replace(/\\/g, "/"));
-            }
-        }
+function getDataFiles() {
+    if (!fileExists(DATA_DIR)) {
+        return [];
     }
 
-    walk(dir);
-    return result;
-}
-
-function sendJSON(res, status, data) {
-    const body = JSON.stringify(data, null, 2);
-
-    res.writeHead(status, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
-    });
-
-    res.end(body);
-}
-
-function sendText(res, status, text, contentType = "text/plain; charset=utf-8") {
-    res.writeHead(status, {
-        "Content-Type": contentType,
-        "Cache-Control": "no-store",
-        "Access-Control-Allow-Origin": "*"
-    });
-
-    res.end(text);
-}
-
-function parseBody(req) {
-    return new Promise((resolve, reject) => {
-        let body = "";
-
-        req.on("data", chunk => {
-            body += chunk;
-
-            if (body.length > 20 * 1024 * 1024) {
-                reject(new Error("Request zu groß."));
-                req.destroy();
-            }
-        });
-
-        req.on("end", () => {
-            if (!body) {
-                resolve({});
-                return;
-            }
-
-            try {
-                resolve(JSON.parse(body));
-            } catch {
-                reject(new Error("Ungültiges JSON."));
-            }
-        });
-
-        req.on("error", reject);
-    });
-}
-
-function modelExists() {
-    return fs.existsSync(MODEL_FILE);
-}
-
-function tokenizerExists() {
-    return fs.existsSync(TOKENIZER_FILE);
-}
-
-function trainingFilesExist() {
-    return modelExists() && tokenizerExists();
-}
-
-function getStatus() {
-    return {
-        ok: true,
-        name: "LUMORA",
-        server: true,
-        training: {
-            running: trainingState.running,
-            progress: trainingState.progress,
-            status: trainingState.status,
-            error: trainingState.error,
-            startedAt: trainingState.startedAt,
-            finishedAt: trainingState.finishedAt
-        },
-        generation: {
-            running: generationState.running
-        },
-        data: {
-            directory: DATA_DIR,
-            files: fs.existsSync(DATA_DIR)
-                ? fs.readdirSync(DATA_DIR)
-                : [],
-            count: fs.existsSync(DATA_DIR)
-                ? fs.readdirSync(DATA_DIR).length
-                : 0
-        },
-        learned: {
-            directory: LEARNED_DIR,
-            exists: fs.existsSync(LEARNED_DIR),
-            model: modelExists(),
-            tokenizer: tokenizerExists(),
-            config: fs.existsSync(CONFIG_FILE),
-            trainingState: fs.existsSync(TRAINING_STATE_FILE)
-        },
-        github: {
-            enabled: Boolean(GITHUB_TOKEN),
-            owner: GITHUB_OWNER,
-            repository: GITHUB_REPO,
-            branch: GITHUB_BRANCH
+    return fs.readdirSync(
+        DATA_DIR,
+        {
+            withFileTypes: true
         }
-    };
+    )
+    .filter(entry => {
+        if (!entry.isFile()) {
+            return false;
+        }
+
+        const name =
+            entry.name.toLowerCase();
+
+        return (
+            name.endsWith(".json") ||
+            name.endsWith(".jsonl") ||
+            name.endsWith(".txt")
+        );
+    })
+    .map(entry =>
+        entry.name
+    );
 }
+
 
 /* =========================================================
    GITHUB
    ========================================================= */
 
-function githubRequest(method, apiPath, body = null) {
-    return new Promise((resolve, reject) => {
-        if (!GITHUB_TOKEN) {
-            reject(new Error("GITHUB_TOKEN ist nicht gesetzt."));
-            return;
-        }
-
-        const https = require("https");
-
-        const options = {
-            hostname: "api.github.com",
-            path: apiPath,
-            method,
-            headers: {
-                "User-Agent": "LUMORA-Render",
-                "Authorization": `Bearer ${GITHUB_TOKEN}`,
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28"
-            }
-        };
-
-        let payload = null;
-
-        if (body !== null) {
-            payload = JSON.stringify(body);
-
-            options.headers["Content-Type"] = "application/json";
-            options.headers["Content-Length"] =
-                Buffer.byteLength(payload);
-        }
-
-        const request = https.request(options, response => {
-            let data = "";
-
-            response.setEncoding("utf8");
-
-            response.on("data", chunk => {
-                data += chunk;
-            });
-
-            response.on("end", () => {
-                let parsed = null;
-
-                try {
-                    parsed = data ? JSON.parse(data) : null;
-                } catch {
-                    parsed = data;
-                }
-
-                if (response.statusCode >= 200 && response.statusCode < 300) {
-                    resolve(parsed);
-                    return;
-                }
-
-                const message =
-                    parsed &&
-                    typeof parsed === "object" &&
-                    parsed.message
-                        ? parsed.message
-                        : `GitHub HTTP ${response.statusCode}`;
-
+function githubRequest(
+    method,
+    apiPath,
+    body = null
+) {
+    return new Promise(
+        (resolve, reject) => {
+            if (!GITHUB_TOKEN) {
                 reject(
                     new Error(
-                        `GitHub API Fehler ${response.statusCode}: ${message}`
+                        "GITHUB_TOKEN fehlt."
                     )
                 );
-            });
-        });
 
-        request.on("error", reject);
+                return;
+            }
 
-        if (payload) {
-            request.write(payload);
+            const payload =
+                body === null
+                    ? null
+                    : JSON.stringify(
+                          body
+                      );
+
+            const options = {
+                hostname:
+                    "api.github.com",
+
+                port:
+                    443,
+
+                path:
+                    apiPath,
+
+                method,
+
+                headers: {
+                    "User-Agent":
+                        "LUMORA",
+
+                    "Accept":
+                        "application/vnd.github+json",
+
+                    "Authorization":
+                        "Bearer " +
+                        GITHUB_TOKEN,
+
+                    "X-GitHub-Api-Version":
+                        "2022-11-28"
+                }
+            };
+
+            if (payload) {
+                options.headers[
+                    "Content-Type"
+                ] =
+                    "application/json";
+
+                options.headers[
+                    "Content-Length"
+                ] =
+                    Buffer.byteLength(
+                        payload
+                    );
+            }
+
+            const request =
+                https.request(
+                    options,
+                    response => {
+                        let data = "";
+
+                        response.on(
+                            "data",
+                            chunk => {
+                                data += chunk;
+                            }
+                        );
+
+                        response.on(
+                            "end",
+                            () => {
+                                let parsed =
+                                    data;
+
+                                try {
+                                    parsed =
+                                        data
+                                            ? JSON.parse(
+                                                  data
+                                              )
+                                            : {};
+                                } catch {}
+
+                                if (
+                                    response.statusCode >=
+                                        200 &&
+                                    response.statusCode <
+                                        300
+                                ) {
+                                    resolve(
+                                        parsed
+                                    );
+                                } else {
+                                    reject(
+                                        new Error(
+                                            "GitHub API " +
+                                            response.statusCode +
+                                            ": " +
+                                            (
+                                                parsed.message ||
+                                                data
+                                            )
+                                        )
+                                    );
+                                }
+                            }
+                        );
+                    }
+                );
+
+            request.on(
+                "error",
+                reject
+            );
+
+            if (payload) {
+                request.write(
+                    payload
+                );
+            }
+
+            request.end();
         }
-
-        request.end();
-    });
+    );
 }
 
-function githubPath(filePath) {
-    return filePath
-        .replace(/\\/g, "/")
-        .replace(/^\/+/, "");
+async function getGitHubFile(
+    filePath
+) {
+    const api =
+        "/repos/" +
+        encodeURIComponent(
+            GITHUB_OWNER
+        ) +
+        "/" +
+        encodeURIComponent(
+            GITHUB_REPO
+        ) +
+        "/contents/" +
+        filePath
+            .split("/")
+            .map(
+                encodeURIComponent
+            )
+            .join("/") +
+        "?ref=" +
+        encodeURIComponent(
+            GITHUB_BRANCH
+        );
+
+    return githubRequest(
+        "GET",
+        api
+    );
 }
 
-async function getGithubFile(filePath) {
-    const encoded = githubPath(filePath)
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/");
+async function uploadGitHubFile(
+    filePath,
+    buffer,
+    message
+) {
+    const encoded =
+        Buffer.from(
+            buffer
+        ).toString(
+            "base64"
+        );
+
+    let sha = null;
 
     try {
-        return await githubRequest(
-            "GET",
-            `/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(
-                GITHUB_REPO
-            )}/contents/${encoded}?ref=${encodeURIComponent(GITHUB_BRANCH)}`
-        );
-    } catch (error) {
-        if (
-            String(error.message).includes("404") ||
-            String(error.message).toLowerCase().includes("not found")
-        ) {
-            return null;
-        }
+        const existing =
+            await getGitHubFile(
+                filePath
+            );
 
-        throw error;
-    }
-}
+        sha =
+            existing.sha ||
+            null;
+    } catch {}
 
-async function uploadFileToGitHub(relativePath) {
-    if (!GITHUB_TOKEN) {
-        throw new Error(
-            "GITHUB_TOKEN fehlt. GitHub-Synchronisierung wurde nicht aktiviert."
-        );
-    }
+    const api =
+        "/repos/" +
+        encodeURIComponent(
+            GITHUB_OWNER
+        ) +
+        "/" +
+        encodeURIComponent(
+            GITHUB_REPO
+        ) +
+        "/contents/" +
+        filePath
+            .split("/")
+            .map(
+                encodeURIComponent
+            )
+            .join("/");
 
-    const absolutePath = path.join(ROOT, relativePath);
+    const body = {
+        message:
+            message ||
+            "LUMORA: gelernte Dateien aktualisiert",
 
-    if (!fs.existsSync(absolutePath)) {
-        throw new Error(
-            `Datei für GitHub nicht gefunden: ${relativePath}`
-        );
-    }
+        content:
+            encoded,
 
-    const content = fs.readFileSync(absolutePath);
-    const base64 = content.toString("base64");
-
-    const existing = await getGithubFile(relativePath);
-
-    const payload = {
-        message: `LUMORA: Update ${relativePath}`,
-        content: base64,
-        branch: GITHUB_BRANCH
+        branch:
+            GITHUB_BRANCH
     };
 
-    if (existing && existing.sha) {
-        payload.sha = existing.sha;
+    if (sha) {
+        body.sha = sha;
     }
 
-    return await githubRequest(
+    return githubRequest(
         "PUT",
-        `/repos/${encodeURIComponent(GITHUB_OWNER)}/${encodeURIComponent(
-            GITHUB_REPO
-        )}/contents/${githubPath(relativePath)}`,
-        payload
+        api,
+        body
     );
 }
 
 async function syncLearnedToGitHub() {
     if (!GITHUB_TOKEN) {
-        console.log(
-            "[GitHub] GITHUB_TOKEN nicht gesetzt – keine Synchronisierung."
-        );
-
         return {
-            enabled: false,
-            uploaded: []
+            success: false,
+            message:
+                "GITHUB_TOKEN fehlt."
         };
     }
 
     const files = [
-        "GELERNT/model.json",
-        "GELERNT/tokenizer.json",
-        "GELERNT/config.json",
-        "GELERNT/training-state.json"
+        "model.json",
+        "tokenizer.json",
+        "config.json",
+        "training-state.json"
     ];
 
     const uploaded = [];
 
-    for (const file of files) {
-        if (!fs.existsSync(path.join(ROOT, file))) {
-            console.log(`[GitHub] Überspringe ${file} – nicht vorhanden.`);
+    for (const filename of files) {
+        const local =
+            path.join(
+                LEARNED_DIR,
+                filename
+            );
+
+        if (!fileExists(local)) {
             continue;
         }
 
-        console.log(`[GitHub] Lade ${file} hoch...`);
+        const buffer =
+            fs.readFileSync(
+                local
+            );
 
-        await uploadFileToGitHub(file);
+        await uploadGitHubFile(
+            "GELERNT/" +
+                filename,
+            buffer,
+            "LUMORA: " +
+                filename +
+                " aktualisiert"
+        );
 
-        uploaded.push(file);
-
-        console.log(`[GitHub] ${file} gespeichert.`);
+        uploaded.push(
+            filename
+        );
     }
 
     return {
-        enabled: true,
+        success: true,
         uploaded
     };
 }
+
+
+/* =========================================================
+   STATUS
+   ========================================================= */
+
+function getModelStatus() {
+    return {
+        model:
+            fileExists(
+                MODEL_FILE
+            ),
+
+        tokenizer:
+            fileExists(
+                TOKENIZER_FILE
+            ),
+
+        config:
+            fileExists(
+                CONFIG_FILE
+            ),
+
+        modelFile:
+            MODEL_FILE,
+
+        tokenizerFile:
+            TOKENIZER_FILE
+    };
+}
+
+function getStatus() {
+    return {
+        success: true,
+
+        name:
+            "LUMORA",
+
+        online:
+            true,
+
+        port:
+            PORT,
+
+        github: {
+            active:
+                Boolean(
+                    GITHUB_TOKEN
+                ),
+
+            owner:
+                GITHUB_OWNER,
+
+            repo:
+                GITHUB_REPO,
+
+            branch:
+                GITHUB_BRANCH
+        },
+
+        daten: {
+            folder:
+                DATA_DIR,
+
+            files:
+                getDataFiles(),
+
+            count:
+                getDataFiles().length
+        },
+
+        model:
+            getModelStatus(),
+
+        training:
+            trainingState,
+
+        generation:
+            generationState
+    };
+}
+
 
 /* =========================================================
    TRAINING
    ========================================================= */
 
-function startTraining() {
+function startTraining(
+    payload
+) {
     if (trainingWorker) {
-        throw new Error("Training läuft bereits.");
+        return {
+            success: false,
+            message:
+                "Training läuft bereits."
+        };
     }
 
-    if (!fs.existsSync(TRAIN_WORKER)) {
-        throw new Error("train-worker.js wurde nicht gefunden.");
+    if (!fileExists(
+        TRAIN_WORKER
+    )) {
+        return {
+            success: false,
+            message:
+                "train-worker.js wurde nicht gefunden."
+        };
     }
 
-    ensureDirectories();
+    const options = {
+        epochs:
+            Number(
+                payload.epochs ||
+                10
+            ),
+
+        sequenceLength:
+            Number(
+                payload.sequenceLength ||
+                256
+            ),
+
+        learningRate:
+            Number(
+                payload.learningRate ||
+                0.0003
+            ),
+
+        contextSize:
+            Number(
+                payload.contextSize ||
+                256
+            )
+    };
 
     trainingState = {
         running: true,
+        phase: "starting",
         progress: 0,
-        status: "Training wird gestartet...",
-        error: null,
-        startedAt: new Date().toISOString(),
-        finishedAt: null
+        epoch: 0,
+        step: 0,
+        loss: null,
+        totalEpochs:
+            options.epochs,
+        message:
+            "Training wird gestartet..."
     };
 
-    trainingWorker = new Worker(TRAIN_WORKER);
+    trainingWorker =
+        new Worker(
+            TRAIN_WORKER,
+            {
+                workerData: {
+                    root:
+                        ROOT,
 
-    trainingWorker.on("message", async message => {
-        try {
-            if (!message || typeof message !== "object") {
+                    daten:
+                        DATA_DIR,
+
+                    gelernt:
+                        LEARNED_DIR,
+
+                    options
+                }
+            }
+        );
+
+    trainingWorker.on(
+        "message",
+        async message => {
+            if (!message) {
                 return;
             }
 
-            if (message.type === "progress") {
-                trainingState.progress =
-                    Number(message.progress ?? message.percent ?? 0);
-
-                trainingState.status =
-                    message.status ||
-                    message.message ||
-                    "Training läuft...";
+            if (
+                message.type ===
+                "started"
+            ) {
+                trainingState =
+                    Object.assign(
+                        {},
+                        trainingState,
+                        message,
+                        {
+                            running:
+                                true
+                        }
+                    );
 
                 return;
             }
 
             if (
-                message.type === "status" ||
-                message.type === "log"
+                message.type ===
+                "progress"
             ) {
-                trainingState.status =
-                    message.status ||
-                    message.message ||
-                    trainingState.status;
-
-                console.log(
-                    "[TRAIN]",
-                    message.message ||
-                    message.status ||
-                    ""
-                );
+                trainingState =
+                    Object.assign(
+                        {},
+                        trainingState,
+                        message,
+                        {
+                            running:
+                                true
+                        }
+                    );
 
                 return;
             }
 
-            if (message.type === "error") {
-                trainingState.running = false;
-                trainingState.error =
-                    message.error ||
-                    message.message ||
-                    "Unbekannter Trainingsfehler.";
+            if (
+                message.type ===
+                "epoch"
+            ) {
+                trainingState =
+                    Object.assign(
+                        {},
+                        trainingState,
+                        message,
+                        {
+                            running:
+                                true,
 
-                trainingState.status = "Training fehlgeschlagen.";
-                trainingState.finishedAt =
-                    new Date().toISOString();
+                            phase:
+                                "training"
+                        }
+                    );
 
-                console.error(
-                    "[TRAIN ERROR]",
-                    trainingState.error
-                );
+                return;
+            }
 
-                if (trainingWorker) {
-                    await trainingWorker.terminate();
-                    trainingWorker = null;
+            if (
+                message.type ===
+                "finished"
+            ) {
+                trainingState =
+                    Object.assign(
+                        {},
+                        trainingState,
+                        message,
+                        {
+                            running:
+                                false,
+
+                            phase:
+                                "finished",
+
+                            progress:
+                                100,
+
+                            message:
+                                "Training abgeschlossen."
+                        }
+                    );
+
+                const worker =
+                    trainingWorker;
+
+                trainingWorker =
+                    null;
+
+                try {
+                    const github =
+                        await syncLearnedToGitHub();
+
+                    trainingState.github =
+                        github;
+                } catch (error) {
+                    trainingState.github = {
+                        success:
+                            false,
+
+                        message:
+                            error.message
+                    };
+                }
+
+                if (
+                    worker
+                ) {
+                    try {
+                        await worker.terminate();
+                    } catch {}
                 }
 
                 return;
             }
 
             if (
-                message.type === "complete" ||
-                message.type === "done" ||
-                message.type === "finished"
+                message.type ===
+                "stopped"
             ) {
-                await finishTraining();
+                trainingState =
+                    Object.assign(
+                        {},
+                        trainingState,
+                        message,
+                        {
+                            running:
+                                false,
+
+                            phase:
+                                "stopped",
+
+                            message:
+                                "Training gestoppt."
+                        }
+                    );
+
+                const worker =
+                    trainingWorker;
+
+                trainingWorker =
+                    null;
+
+                if (worker) {
+                    try {
+                        await worker.terminate();
+                    } catch {}
+                }
+
+                return;
             }
-        } catch (error) {
+
+            if (
+                message.type ===
+                "error"
+            ) {
+                trainingState =
+                    Object.assign(
+                        {},
+                        trainingState,
+                        {
+                            running:
+                                false,
+
+                            phase:
+                                "error",
+
+                            message:
+                                message.error,
+
+                            error:
+                                message.error,
+
+                            stack:
+                                message.stack
+                        }
+                    );
+
+                const worker =
+                    trainingWorker;
+
+                trainingWorker =
+                    null;
+
+                if (worker) {
+                    try {
+                        await worker.terminate();
+                    } catch {}
+                }
+            }
+        }
+    );
+
+    trainingWorker.on(
+        "error",
+        error => {
             console.error(
-                "[TRAIN MESSAGE ERROR]",
+                "[TRAIN WORKER ERROR]",
                 error
             );
+
+            trainingState = {
+                ...trainingState,
+
+                running:
+                    false,
+
+                phase:
+                    "error",
+
+                message:
+                    error.message,
+
+                error:
+                    error.message
+            };
+
+            trainingWorker =
+                null;
         }
-    });
+    );
 
-    trainingWorker.on("error", error => {
-        console.error("[TRAIN WORKER ERROR]", error);
+    trainingWorker.on(
+        "exit",
+        code => {
+            console.log(
+                "[TRAIN WORKER EXIT]",
+                code
+            );
 
-        trainingState.running = false;
-        trainingState.status = "Training fehlgeschlagen.";
-        trainingState.error = error.message;
-        trainingState.finishedAt =
-            new Date().toISOString();
+            if (
+                code !== 0 &&
+                trainingState.running
+            ) {
+                trainingState = {
+                    ...trainingState,
 
-        trainingWorker = null;
-    });
+                    running:
+                        false,
 
-    trainingWorker.on("exit", async code => {
-        console.log("[TRAIN WORKER EXIT]", code);
+                    phase:
+                        "error",
 
-        if (
-            trainingState.running &&
-            code !== 0
-        ) {
-            trainingState.running = false;
-            trainingState.status = "Training beendet.";
-            trainingState.error =
-                `Training-Worker beendet mit Code ${code}.`;
-            trainingState.finishedAt =
-                new Date().toISOString();
+                    message:
+                        "Training-Worker beendet mit Code " +
+                        code
+                };
+            }
+
+            trainingWorker =
+                null;
         }
+    );
 
-        trainingWorker = null;
-    });
+    return {
+        success: true,
+        started: true,
+        options
+    };
+}
+
+async function stopTraining() {
+    if (!trainingWorker) {
+        return {
+            success: false,
+            message:
+                "Kein Training läuft."
+        };
+    }
+
+    trainingState.message =
+        "Training wird gestoppt...";
 
     trainingWorker.postMessage({
-        type: "start",
-        action: "train"
+        type:
+            "stop"
     });
+
+    return {
+        success: true,
+        stopping: true
+    };
 }
 
-async function finishTraining() {
-    console.log("[TRAIN] Training erfolgreich beendet.");
-
-    ensureDirectories();
-
-    const model = modelExists();
-    const tokenizer = tokenizerExists();
-
-    console.log(
-        `[TRAIN] model.json: ${model ? "OK" : "FEHLT"}`
-    );
-
-    console.log(
-        `[TRAIN] tokenizer.json: ${tokenizer ? "OK" : "FEHLT"}`
-    );
-
-    if (!model || !tokenizer) {
-        trainingState.running = false;
-        trainingState.progress = 100;
-        trainingState.status =
-            "Training beendet, aber Model/Tokenizer fehlen.";
-        trainingState.error =
-            `Erwartet wurden ${!model ? "GELERNT/model.json" : ""}` +
-            `${!model && !tokenizer ? " und " : ""}` +
-            `${!tokenizer ? "GELERNT/tokenizer.json" : ""}.`;
-        trainingState.finishedAt =
-            new Date().toISOString();
-
-        console.error(
-            "[TRAIN]",
-            trainingState.error
-        );
-
-        return;
-    }
-
-    trainingState.running = false;
-    trainingState.progress = 100;
-    trainingState.status =
-        "Training erfolgreich abgeschlossen.";
-    trainingState.error = null;
-    trainingState.finishedAt =
-        new Date().toISOString();
-
-    fs.writeFileSync(
-        TRAINING_STATE_FILE,
-        JSON.stringify(trainingState, null, 2),
-        "utf8"
-    );
-
-    try {
-        const result = await syncLearnedToGitHub();
-
-        console.log(
-            "[GitHub] Synchronisierung abgeschlossen:",
-            result.uploaded
-        );
-
-        trainingState.status =
-            "Training fertig – Modell in GitHub gespeichert.";
-
-        fs.writeFileSync(
-            TRAINING_STATE_FILE,
-            JSON.stringify(trainingState, null, 2),
-            "utf8"
-        );
-
-        /*
-         * training-state.json wurde gerade nach GitHub geschrieben.
-         * Wenn sich der Inhalt danach geändert hat, wird es noch einmal
-         * hochgeladen.
-         */
-        if (GITHUB_TOKEN) {
-            try {
-                await uploadFileToGitHub(
-                    "GELERNT/training-state.json"
-                );
-            } catch (error) {
-                console.error(
-                    "[GitHub] training-state.json konnte nicht aktualisiert werden:",
-                    error.message
-                );
-            }
-        }
-    } catch (error) {
-        console.error(
-            "[GitHub ERROR]",
-            error.message
-        );
-
-        trainingState.status =
-            "Training fertig – GitHub-Speicherung fehlgeschlagen.";
-        trainingState.error =
-            `GitHub: ${error.message}`;
-
-        fs.writeFileSync(
-            TRAINING_STATE_FILE,
-            JSON.stringify(trainingState, null, 2),
-            "utf8"
-        );
-    }
-}
-
-function stopTraining() {
-    if (!trainingWorker) {
-        return false;
-    }
-
-    try {
-        trainingWorker.postMessage({
-            type: "stop",
-            action: "stop"
-        });
-    } catch {}
-
-    return true;
-}
 
 /* =========================================================
-   GENERATION
+   GENERIERUNG
    ========================================================= */
 
-function startGeneration(payload) {
+function startGeneration(
+    payload
+) {
     if (generateWorker) {
-        throw new Error("Generierung läuft bereits.");
+        return {
+            success: false,
+            message:
+                "Generation läuft bereits."
+        };
     }
 
-    if (!fs.existsSync(GENERATE_WORKER)) {
-        throw new Error("generate-worker.js wurde nicht gefunden.");
+    if (!fileExists(
+        GENERATE_WORKER
+    )) {
+        return {
+            success: false,
+            message:
+                "generate-worker.js wurde nicht gefunden."
+        };
     }
 
-    if (!trainingFilesExist()) {
-        throw new Error(
-            "Die KI wurde noch nicht vollständig trainiert. " +
-            "GELERNT/model.json und GELERNT/tokenizer.json fehlen."
+    const prompt =
+        String(
+            payload.prompt ||
+            ""
+        ).trim();
+
+    if (!prompt) {
+        return {
+            success: false,
+            message:
+                "Kein Prompt angegeben."
+        };
+    }
+
+    generationState = {
+        running: true,
+        text: "",
+        error: null,
+        startedAt:
+            new Date().toISOString(),
+        finishedAt: null
+    };
+
+    generateWorker =
+        new Worker(
+            GENERATE_WORKER,
+            {
+                workerData: {
+                    root:
+                        ROOT,
+
+                    gelernt:
+                        LEARNED_DIR,
+
+                    prompt,
+
+                    options:
+                        payload || {}
+                }
+            }
         );
-    }
 
-    generationState.running = true;
+    generateWorker.on(
+        "message",
+        message => {
+            if (!message) {
+                return;
+            }
 
-    generateWorker = new Worker(GENERATE_WORKER);
+            if (
+                message.type ===
+                "token"
+            ) {
+                generationState.text +=
+                    String(
+                        message.token ||
+                        ""
+                    );
 
-    generateWorker.on("message", message => {
-        if (!message || typeof message !== "object") {
-            return;
+                return;
+            }
+
+            if (
+                message.type ===
+                "complete"
+            ) {
+                generationState = {
+                    ...generationState,
+
+                    running:
+                        false,
+
+                    text:
+                        message.text ||
+                        generationState.text,
+
+                    finishedAt:
+                        new Date().toISOString()
+                };
+
+                generateWorker =
+                    null;
+
+                return;
+            }
+
+            if (
+                message.type ===
+                "error"
+            ) {
+                generationState = {
+                    ...generationState,
+
+                    running:
+                        false,
+
+                    error:
+                        message.error,
+
+                    finishedAt:
+                        new Date().toISOString()
+                };
+
+                generateWorker =
+                    null;
+            }
         }
+    );
 
-        if (message.type === "complete") {
-            generationState.running = false;
+    generateWorker.on(
+        "error",
+        error => {
+            console.error(
+                "[GENERATE WORKER ERROR]",
+                error
+            );
+
+            generationState = {
+                ...generationState,
+
+                running:
+                    false,
+
+                error:
+                    error.message,
+
+                finishedAt:
+                    new Date().toISOString()
+            };
+
+            generateWorker =
+                null;
         }
+    );
 
-        if (message.type === "error") {
-            generationState.running = false;
+    generateWorker.on(
+        "exit",
+        code => {
+            console.log(
+                "[GENERATE WORKER EXIT]",
+                code
+            );
+
+            if (
+                code !== 0 &&
+                generationState.running
+            ) {
+                generationState = {
+                    ...generationState,
+
+                    running:
+                        false,
+
+                    error:
+                        "Generation-Worker beendet mit Code " +
+                        code,
+
+                    finishedAt:
+                        new Date().toISOString()
+                };
+            }
+
+            generateWorker =
+                null;
         }
-    });
+    );
 
-    generateWorker.on("error", error => {
-        console.error(
-            "[GENERATE WORKER ERROR]",
-            error
-        );
-
-        generationState.running = false;
-    });
-
-    generateWorker.on("exit", () => {
-        generateWorker = null;
-        generationState.running = false;
-    });
-
-    generateWorker.postMessage({
-        type: "generate",
-        action: "generate",
-        ...payload
-    });
-
-    return true;
+    return {
+        success: true,
+        started: true
+    };
 }
 
 function stopGeneration() {
     if (!generateWorker) {
-        return false;
+        return {
+            success: false,
+            message:
+                "Keine Generation läuft."
+        };
     }
 
-    try {
-        generateWorker.postMessage({
-            type: "stop",
-            action: "stop"
-        });
-    } catch {}
-
-    return true;
-}
-
-/* =========================================================
-   STATIC FILES
-   ========================================================= */
-
-const MIME = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "application/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
-    ".txt": "text/plain; charset=utf-8",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".svg": "image/svg+xml",
-    ".ico": "image/x-icon"
-};
-
-function serveStatic(req, res, pathname) {
-    let requested = pathname;
-
-    if (requested === "/") {
-        requested = "/index.html";
-    }
-
-    requested = decodeURIComponent(requested);
-
-    const filePath = path.normalize(
-        path.join(ROOT, requested)
-    );
-
-    if (
-        !filePath.startsWith(ROOT) ||
-        !fs.existsSync(filePath) ||
-        !fs.statSync(filePath).isFile()
-    ) {
-        return false;
-    }
-
-    const ext = path.extname(filePath).toLowerCase();
-    const contentType =
-        MIME[ext] ||
-        "application/octet-stream";
-
-    res.writeHead(200, {
-        "Content-Type": contentType,
-        "Cache-Control": "no-cache"
+    generateWorker.postMessage({
+        type:
+            "stop"
     });
 
-    fs.createReadStream(filePath).pipe(res);
-
-    return true;
+    return {
+        success: true,
+        stopping: true
+    };
 }
 
+
 /* =========================================================
-   SERVER
+   HTTP SERVER
    ========================================================= */
 
-const server = http.createServer(async (req, res) => {
-    try {
-        if (req.method === "OPTIONS") {
-            res.writeHead(204, {
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type",
-                "Access-Control-Allow-Methods": "GET,POST,OPTIONS"
-            });
+const server =
+    http.createServer(
+        async (req, res) => {
+            try {
+                if (
+                    req.method ===
+                    "OPTIONS"
+                ) {
+                    res.writeHead(
+                        204,
+                        {
+                            "Access-Control-Allow-Origin":
+                                "*",
 
-            res.end();
-            return;
+                            "Access-Control-Allow-Headers":
+                                "Content-Type",
+
+                            "Access-Control-Allow-Methods":
+                                "GET,POST,OPTIONS"
+                        }
+                    );
+
+                    res.end();
+
+                    return;
+                }
+
+                const url =
+                    new URL(
+                        req.url,
+                        "http://" +
+                            (
+                                req.headers.host ||
+                                "localhost"
+                            )
+                    );
+
+                const pathname =
+                    url.pathname;
+
+                /* -------------------------
+                   API
+                   ------------------------- */
+
+                if (
+                    pathname ===
+                    "/api/status"
+                ) {
+                    json(
+                        res,
+                        200,
+                        getStatus()
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/files"
+                ) {
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            files:
+                                getDataFiles(),
+
+                            daten:
+                                DATA_DIR,
+
+                            gelernt:
+                                LEARNED_DIR
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/data"
+                ) {
+                    const files =
+                        getDataFiles();
+
+                    const result =
+                        [];
+
+                    for (
+                        const filename
+                        of files
+                    ) {
+                        const file =
+                            path.join(
+                                DATA_DIR,
+                                filename
+                            );
+
+                        const stat =
+                            fs.statSync(
+                                file
+                            );
+
+                        result.push({
+                            name:
+                                filename,
+
+                            size:
+                                stat.size,
+
+                            modified:
+                                stat.mtime
+                        });
+                    }
+
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            files:
+                                result
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/model"
+                ) {
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            exists:
+                                fileExists(
+                                    MODEL_FILE
+                                ),
+
+                            model:
+                                readJSON(
+                                    MODEL_FILE
+                                )
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/tokenizer"
+                ) {
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            exists:
+                                fileExists(
+                                    TOKENIZER_FILE
+                                ),
+
+                            tokenizer:
+                                readJSON(
+                                    TOKENIZER_FILE
+                                )
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/config"
+                ) {
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            config:
+                                readJSON(
+                                    CONFIG_FILE
+                                )
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/training-state"
+                ) {
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            ...trainingState
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/generate/status"
+                ) {
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            ...generationState
+                        }
+                    );
+
+                    return;
+                }
+
+                if (
+                    pathname ===
+                    "/api/reload"
+                ) {
+                    json(
+                        res,
+                        200,
+                        {
+                            success:
+                                true,
+
+                            status:
+                                getStatus()
+                        }
+                    );
+
+                    return;
+                }
+
+                /* -------------------------
+                   POST
+                   ------------------------- */
+
+                if (
+                    req.method ===
+                    "POST" &&
+                    pathname ===
+                    "/api/train/start"
+                ) {
+                    const body =
+                        await readBody(
+                            req
+                        );
+
+                    const result =
+                        startTraining(
+                            body
+                        );
+
+                    json(
+                        res,
+                        result.success
+                            ? 200
+                            : 409,
+                        result
+                    );
+
+                    return;
+                }
+
+                if (
+                    req.method ===
+                    "POST" &&
+                    pathname ===
+                    "/api/train/stop"
+                ) {
+                    const result =
+                        await stopTraining();
+
+                    json(
+                        res,
+                        200,
+                        result
+                    );
+
+                    return;
+                }
+
+                if (
+                    req.method ===
+                    "POST" &&
+                    pathname ===
+                    "/api/generate"
+                ) {
+                    const body =
+                        await readBody(
+                            req
+                        );
+
+                    const result =
+                        startGeneration(
+                            body
+                        );
+
+                    json(
+                        res,
+                        result.success
+                            ? 200
+                            : 409,
+                        result
+                    );
+
+                    return;
+                }
+
+                if (
+                    req.method ===
+                    "POST" &&
+                    pathname ===
+                    "/api/generate/stop"
+                ) {
+                    const result =
+                        stopGeneration();
+
+                    json(
+                        res,
+                        200,
+                        result
+                    );
+
+                    return;
+                }
+
+                /* -------------------------
+                   STATIC
+                   ------------------------- */
+
+                let filePath;
+
+                if (
+                    pathname ===
+                    "/" ||
+                    pathname ===
+                    "/index.html"
+                ) {
+                    filePath =
+                        path.join(
+                            ROOT,
+                            "index.html"
+                        );
+                } else {
+                    const safePath =
+                        path.normalize(
+                            pathname
+                        ).replace(
+                            /^(\.\.[/\\])+/, ""
+                        );
+
+                    filePath =
+                        path.join(
+                            ROOT,
+                            safePath
+                        );
+                }
+
+                if (
+                    !filePath.startsWith(
+                        ROOT
+                    )
+                ) {
+                    text(
+                        res,
+                        403,
+                        "Forbidden"
+                    );
+
+                    return;
+                }
+
+                if (
+                    !fileExists(
+                        filePath
+                    )
+                ) {
+                    text(
+                        res,
+                        404,
+                        "Nicht gefunden."
+                    );
+
+                    return;
+                }
+
+                const extension =
+                    path.extname(
+                        filePath
+                    ).toLowerCase();
+
+                const mime = {
+                    ".html":
+                        "text/html; charset=utf-8",
+
+                    ".js":
+                        "application/javascript; charset=utf-8",
+
+                    ".css":
+                        "text/css; charset=utf-8",
+
+                    ".json":
+                        "application/json; charset=utf-8",
+
+                    ".txt":
+                        "text/plain; charset=utf-8",
+
+                    ".png":
+                        "image/png",
+
+                    ".jpg":
+                        "image/jpeg",
+
+                    ".jpeg":
+                        "image/jpeg",
+
+                    ".svg":
+                        "image/svg+xml",
+
+                    ".ico":
+                        "image/x-icon"
+                }[
+                    extension
+                ] ||
+                "application/octet-stream";
+
+                res.writeHead(
+                    200,
+                    {
+                        "Content-Type":
+                            mime,
+
+                        "Cache-Control":
+                            "no-cache"
+                    }
+                );
+
+                fs.createReadStream(
+                    filePath
+                ).pipe(res);
+
+                return;
+
+            } catch (error) {
+                console.error(
+                    "[SERVER ERROR]",
+                    error
+                );
+
+                sendError(
+                    res,
+                    500,
+                    "Interner Serverfehler.",
+                    error
+                );
+            }
         }
+    );
 
-        const url = new URL(
-            req.url,
-            `http://${req.headers.host || "localhost"}`
+
+/* =========================================================
+   SERVER START
+   ========================================================= */
+
+server.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+        console.log(
+            "======================================"
         );
 
-        const pathname = url.pathname;
+        console.log(
+            " LUMORA"
+        );
 
-        /* STATUS */
+        console.log(
+            "======================================"
+        );
 
-        if (
-            req.method === "GET" &&
-            pathname === "/api/status"
-        ) {
-            sendJSON(res, 200, getStatus());
-            return;
-        }
+        console.log(
+            "Server:     http://localhost:" +
+            PORT
+        );
 
-        /* FILES */
+        console.log(
+            "DATEN:      " +
+            DATA_DIR
+        );
 
-        if (
-            req.method === "GET" &&
-            pathname === "/api/files"
-        ) {
-            sendJSON(res, 200, {
-                data: listFilesRecursive(DATA_DIR),
-                learned: listFilesRecursive(LEARNED_DIR)
-            });
+        console.log(
+            "GELERNT:    " +
+            LEARNED_DIR
+        );
 
-            return;
-        }
+        console.log(
+            "Model:      " +
+            (
+                fileExists(
+                    MODEL_FILE
+                )
+                    ? "vorhanden"
+                    : "noch nicht vorhanden"
+            )
+        );
 
-        /* DATA */
+        console.log(
+            "Tokenizer:  " +
+            (
+                fileExists(
+                    TOKENIZER_FILE
+                )
+                    ? "vorhanden"
+                    : "noch nicht vorhanden"
+            )
+        );
 
-        if (
-            req.method === "GET" &&
-            pathname === "/api/data"
-        ) {
-            const files = listFilesRecursive(DATA_DIR);
+        console.log(
+            "Daten:      " +
+            getDataFiles().length +
+            " Datei(en)"
+        );
 
-            const data = [];
+        console.log(
+            "GitHub:     " +
+            (
+                GITHUB_TOKEN
+                    ? "aktiv (" +
+                      GITHUB_OWNER +
+                      "/" +
+                      GITHUB_REPO +
+                      ")"
+                    : "nicht konfiguriert"
+            )
+        );
 
-            for (const relative of files) {
-                const full = path.join(ROOT, relative);
+        console.log(
+            "API:"
+        );
 
-                if (relative.endsWith(".json")) {
-                    data.push({
-                        file: relative,
-                        content: safeReadJSON(full)
-                    });
-                } else {
-                    data.push({
-                        file: relative,
-                        content: fs.readFileSync(
-                            full,
-                            "utf8"
-                        )
-                    });
-                }
-            }
+        console.log(
+            "GET  /api/status"
+        );
 
-            sendJSON(res, 200, data);
-            return;
-        }
+        console.log(
+            "GET  /api/files"
+        );
 
-        /* MODEL */
+        console.log(
+            "GET  /api/data"
+        );
 
-        if (
-            req.method === "GET" &&
-            pathname === "/api/model"
-        ) {
-            if (!modelExists()) {
-                sendJSON(res, 404, {
-                    exists: false,
-                    error: "GELERNT/model.json wurde noch nicht erstellt."
-                });
+        console.log(
+            "GET  /api/model"
+        );
 
-                return;
-            }
+        console.log(
+            "GET  /api/tokenizer"
+        );
 
-            sendJSON(res, 200, {
-                exists: true,
-                model: safeReadJSON(MODEL_FILE)
-            });
+        console.log(
+            "GET  /api/config"
+        );
 
-            return;
-        }
+        console.log(
+            "GET  /api/training-state"
+        );
 
-        /* TOKENIZER */
+        console.log(
+            "GET  /api/generate/status"
+        );
 
-        if (
-            req.method === "GET" &&
-            pathname === "/api/tokenizer"
-        ) {
-            if (!tokenizerExists()) {
-                sendJSON(res, 404, {
-                    exists: false,
-                    error:
-                        "GELERNT/tokenizer.json wurde noch nicht erstellt."
-                });
+        console.log(
+            "POST /api/train/start"
+        );
 
-                return;
-            }
+        console.log(
+            "POST /api/train/stop"
+        );
 
-            sendJSON(res, 200, {
-                exists: true,
-                tokenizer:
-                    safeReadJSON(TOKENIZER_FILE)
-            });
+        console.log(
+            "POST /api/generate"
+        );
 
-            return;
-        }
+        console.log(
+            "POST /api/generate/stop"
+        );
 
-        /* CONFIG */
-
-        if (
-            req.method === "GET" &&
-            pathname === "/api/config"
-        ) {
-            sendJSON(res, 200, {
-                exists: fs.existsSync(CONFIG_FILE),
-                config: safeReadJSON(CONFIG_FILE, {})
-            });
-
-            return;
-        }
-
-        /* TRAINING STATE */
-
-        if (
-            req.method === "GET" &&
-            pathname === "/api/training-state"
-        ) {
-            sendJSON(res, 200, {
-                ...trainingState,
-                file:
-                    safeReadJSON(
-                        TRAINING_STATE_FILE,
-                        null
-                    )
-            });
-
-            return;
-        }
-
-        /* RELOAD */
-
-        if (
-            req.method === "GET" &&
-            pathname === "/api/reload"
-        ) {
-            ensureDirectories();
-
-            sendJSON(res, 200, getStatus());
-            return;
-        }
-
-        /* START TRAINING */
-
-        if (
-            req.method === "POST" &&
-            pathname === "/api/train/start"
-        ) {
-            if (trainingWorker) {
-                sendJSON(res, 409, {
-                    ok: false,
-                    error: "Training läuft bereits."
-                });
-
-                return;
-            }
-
-            startTraining();
-
-            sendJSON(res, 200, {
-                ok: true,
-                message: "Training gestartet.",
-                status: getStatus()
-            });
-
-            return;
-        }
-
-        /* STOP TRAINING */
-
-        if (
-            req.method === "POST" &&
-            pathname === "/api/train/stop"
-        ) {
-            const stopped = stopTraining();
-
-            sendJSON(res, 200, {
-                ok: stopped,
-                message: stopped
-                    ? "Training wird gestoppt."
-                    : "Kein Training läuft."
-            });
-
-            return;
-        }
-
-        /* START GENERATION */
-
-        if (
-            req.method === "POST" &&
-            pathname === "/api/generate"
-        ) {
-            const payload = await parseBody(req);
-
-            try {
-                startGeneration(payload);
-
-                sendJSON(res, 200, {
-                    ok: true,
-                    message: "Generierung gestartet."
-                });
-            } catch (error) {
-                sendJSON(res, 500, {
-                    ok: false,
-                    error: error.message
-                });
-            }
-
-            return;
-        }
-
-        /* STOP GENERATION */
-
-        if (
-            req.method === "POST" &&
-            pathname === "/api/generate/stop"
-        ) {
-            const stopped = stopGeneration();
-
-            sendJSON(res, 200, {
-                ok: stopped,
-                message: stopped
-                    ? "Generierung wird gestoppt."
-                    : "Keine Generierung läuft."
-            });
-
-            return;
-        }
-
-        /* STATIC */
-
-        if (req.method === "GET") {
-            if (serveStatic(req, res, pathname)) {
-                return;
-            }
-        }
-
-        sendJSON(res, 404, {
-            ok: false,
-            error: "Nicht gefunden."
-        });
-    } catch (error) {
-        console.error("[SERVER ERROR]", error);
-
-        sendJSON(res, 500, {
-            ok: false,
-            error: error.message || "Interner Serverfehler."
-        });
+        console.log(
+            "======================================"
+        );
     }
-});
+);
 
-/* =========================================================
-   START
-   ========================================================= */
+process.on(
+    "SIGTERM",
+    async () => {
+        console.log(
+            "SIGTERM erhalten."
+        );
 
-server.listen(PORT, HOST, () => {
-    console.log("======================================");
-    console.log(" LUMORA");
-    console.log("======================================");
-    console.log(`Server:     http://localhost:${PORT}`);
-    console.log(`DATEN:      ${DATA_DIR}`);
-    console.log(`GELERNT:    ${LEARNED_DIR}`);
-    console.log(
-        `Model:      ${modelExists() ? "vorhanden" : "noch nicht vorhanden"}`
-    );
-    console.log(
-        `Tokenizer:  ${
-            tokenizerExists()
-                ? "vorhanden"
-                : "noch nicht vorhanden"
-        }`
-    );
-    console.log(
-        `Daten:      ${listFilesRecursive(DATA_DIR).length} Datei(en)`
-    );
-    console.log(
-        `GitHub:     ${
-            GITHUB_TOKEN
-                ? `aktiv (${GITHUB_OWNER}/${GITHUB_REPO})`
-                : "nicht aktiviert"
-        }`
-    );
-    console.log("API:");
-    console.log("GET  /api/status");
-    console.log("GET  /api/files");
-    console.log("GET  /api/data");
-    console.log("GET  /api/model");
-    console.log("GET  /api/tokenizer");
-    console.log("GET  /api/config");
-    console.log("GET  /api/training-state");
-    console.log("GET  /api/reload");
-    console.log("POST /api/train/start");
-    console.log("POST /api/train/stop");
-    console.log("POST /api/generate");
-    console.log("POST /api/generate/stop");
-    console.log("======================================");
-});
+        if (trainingWorker) {
+            try {
+                trainingWorker.postMessage({
+                    type:
+                        "stop"
+                });
+            } catch {}
+        }
+
+        if (generateWorker) {
+            try {
+                generateWorker.postMessage({
+                    type:
+                        "stop"
+                });
+            } catch {}
+        }
+
+        server.close(
+            () => {
+                process.exit(
+                    0
+                );
+            }
+        );
+    }
+);
+
+process.on(
+    "SIGINT",
+    async () => {
+        console.log(
+            "SIGINT erhalten."
+        );
+
+        if (trainingWorker) {
+            try {
+                trainingWorker.postMessage({
+                    type:
+                        "stop"
+                });
+            } catch {}
+        }
+
+        if (generateWorker) {
+            try {
+                generateWorker.postMessage({
+                    type:
+                        "stop"
+                });
+            } catch {}
+        }
+
+        server.close(
+            () => {
+                process.exit(
+                    0
+                );
+            }
+        );
+    }
+);
